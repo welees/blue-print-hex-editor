@@ -8,8 +8,8 @@ Module Name:
 
 Abstract:
 
-    To define interfaces / structures of object provider of weLees Binary Editor.
-	All provider followed this interface can work for weLees Binary Editor
+    To define interfaces / structures of object provider of weLees Blue Print.
+	All provider followed this interface can work for weLees Blue Print
 
 Author:
 
@@ -24,8 +24,6 @@ Notes:
 Revision History:
     1.0 New Release  2020-12-03
 
-
-
 ************************************************************/
 
 
@@ -39,8 +37,10 @@ Revision History:
 #endif //BOOLEAN
 
 
-#define _WRBCP_MAJOR 1    //weLees Remote Binary Command Protocol 1.0
-#define _WRBCP_MINOR 1
+#define _WBDP_MAJOR 1    //weLees Blue Print Data Provider Protocol 1.0
+#define _WBDP_MINOR 1
+
+
 //Service function, custom provider should declare function 'UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)' to handle request
 typedef UINT32 (*ServiceRoutine)(IN UINT16 uCommand,IN PVOID pParameter);
 
@@ -56,7 +56,7 @@ typedef struct _SHAKE_HAND
 #define _PROXY_FEATURE_SEARCH 2        //OUT  User can do searching operation in objects
 	UINT16 Type;
 #define _PROXY_TYPE_SOLID_DEVICE_PROVIDER     1  //The data of object provided by current provider is solid for long time, such as disk/file
-#define _PROXY_TYPE_VIOLATILE_DEVICE_PROVIDER 2  //The data of object provided by current provider is violatile for one time, such as networks package
+#define _PROXY_TYPE_VIOLATILE_DEVICE_PROVIDER 2  //The data of object provided by current provider is volatile for one time, such as networks package
 	CHAR   Name[32];                   //OUT  Name of provider
 	CHAR   Description[256];           //OUT  Provider description
 	CHAR   Vendor[256];                //OUT  Vendor of provider
@@ -93,10 +93,10 @@ typedef struct _QUERY_DEVICE_PROFILE
 	UINT64 Bytes;                      //OUT   The total size in bytes of object
 	UINT32 SectorSize;                 //OUT   The sector/block size of object, it should be set to 1 for character object
 	UINT32 Features;
-#define _DEVICE_FEATURE_BLOCK_DEVICE 1
-#define _DEVICE_FEATURE_RESIZABLE    2
-#define _DEVICE_FEATURE_READ_ONLY    4
-#define _DEVICE_FEATURE_VIOLATILE    8
+#define _DEVICE_FEATURE_BLOCK_DEVICE   1
+#define _DEVICE_FEATURE_RESIZABLE      2
+#define _DEVICE_FEATURE_READ_ONLY      4
+#define _DEVICE_FEATURE_VOLATILE       8
 	char   Description[1024];          //OUT   Object information
 }QUERY_DEVICE_PROFILE,*PQUERY_DEVICE_PROFILE;
 
@@ -128,13 +128,12 @@ typedef struct _SEARCH_ITEM
 
 typedef struct _SEARCH_RESULT
 {
-	UINT64              CurrentOffset;                   //OUT   The searching position
+	UINT64              CurrentOffset; //OUT   The searching position
 	UINT32              ErrorCode;
-	UINT16              TaskID;                          //OUT   The searching ID, front-end should use it to query result
-	UINT8               Status;                          //OUT   1 means search operation stopped
-#define _SEARCH_STATUS_STOPPED  1 //Searching task stopped
-#define _SEARCH_STATUS_STOPPING 2 //Searching task is been stopping
-//#define _SEARCH_STATUS_HOLD 2 //Searching hold for data found, to continue searching, set blockoffset/startoffset as currentoffset and redo
+	UINT16              TaskID;        //OUT   The searching ID, front-end should use it to query result
+	UINT8               Status;        //OUT   1 means search operation stopped
+#define _SEARCH_STATUS_STOPPED  1      //Searching task stopped
+#define _SEARCH_STATUS_STOPPING 2      //Searching task is been stopping
 	UINT8               MatchedCount;
 	vector<SEARCH_ITEM> MatchItems;
 #ifdef _WIN32
@@ -159,7 +158,7 @@ typedef struct _SEARCH_PARAM
 	UINT32         OffsetInBlock;             //Search from specified offset in block(search part of block)
 	UINT16         DataSize;                  //size of data for searching
 	UINT16         TaskID;                    //The searching ID, front-end should use it to query result, 0 means new task
-	vector<UINT8>  Data;                   //data for searching
+	vector<UINT8>  Data;                      //data for searching
 	PSEARCH_RESULT Result;
 }SEARCH_PARAM,*PSEARCH_PARAM;
 
@@ -186,16 +185,6 @@ typedef struct _SEARCH_TASK
 
 #define ALIGN2DOWN(a,b)((((a))/(b))*(b))
 
-
-/*
-#define _COMMAND_QUERY_STATUS          6  //Query task status
-typedef struct _QUERY_STATUS
-{
-	UINT16 TaskID;                          //IN  Task ID return by provider
-	UINT32 Status;
-	UINT32 Rate;
-}QUERY_STATUS,*PQUERY_STATUS;
-*/
 
 #define _COMMAND_REPLACE_MODIFIED_FILE 8  //Set the size of file, the parameter is a UINT64 value
 typedef struct _REPLACE_MODIFIED_FILE
