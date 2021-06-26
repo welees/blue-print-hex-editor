@@ -6,12 +6,15 @@ typedef int BOOL;
 typedef char CHAR,*PCHAR;
 typedef unsigned short UINT16,*PUINT16;
 typedef unsigned char UINT8,*PUINT8;
-typedef unsigned long UINT32,*PUINT32;
+typedef unsigned int UINT32,*PUINT32,UINT,*PUINT,ULONG,*PULONG;
 typedef unsigned long long UINT64,*PUINT64;
+typedef long long INT64,*PINT64;
 typedef void *PVOID;
 
 #define IN
 #define OUT
+#define APIENTRY
+
 
 #include <linux/fs.h>
 #include <fcntl.h>
@@ -21,6 +24,8 @@ typedef void *PVOID;
 #include <linux/hdreg.h>
 #include <unistd.h>
 #include <string.h>
+#include <pthread.h>
+#include <sys/wait.h>
 
 #endif //_WIN32
 
@@ -161,7 +166,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #endif //_WIN32
 	
 	pTask->Parameter.Result->MatchedCount=0;
-	pTask->InterBuffer.resize(32768);
+	pTask->InterBuffer.resize(1048576);
 	pTask->RemainOffset=0;
 	pTask->SearchPoint=&pTask->InterBuffer[0];
 	pTask->BufferSize=0;
@@ -211,7 +216,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 				pTask->BufferSize=pTask->RemainOffset+u;
 				if(uSearchSize<pTask->BufferSize)
 				{
-					pTask->BufferSize=uSearchSize;
+					pTask->BufferSize=(UINT)uSearchSize;
 				}
 			}
 			
@@ -256,7 +261,10 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #endif //_WIN32
 								pTask->Parameter.Result->MatchedCount++;
 								
-								pItem=&pTask->Parameter.Result->MatchItems[0];
+								if(pTask->Parameter.Result->MatchItems.size())
+								{
+									pItem=&pTask->Parameter.Result->MatchItems[0];
+								}
 								for(i=0;i<(int)pTask->Parameter.Result->MatchItems.size();i++)
 								{
 									if(pItem->BlockOffset==pSearch->StartOffset+ALIGN2DOWN(pTask->SearchPoint-&pTask->InterBuffer[0]-pTask->RemainOffset,pSearch->BlockSize))
@@ -331,6 +339,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 }
 
 
+#ifdef _WIN32
 int APIENTRY DllMain(IN HANDLE hModule,IN DWORD uCommand,LPVOID lpReserved)
 {
 	return TRUE;
@@ -367,11 +376,11 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 			pShakeHand->Type=_PROXY_TYPE_SOLID_DEVICE_PROVIDER;
 #if _MSC_VER<1300
 			strcpy(pShakeHand->Name,"Volumes");
-			strcpy(pShakeHand->Description,"Windows VolumeProvider");
+			strcpy(pShakeHand->Description,"weLees Windows VolumeProvider");
 			strcpy(pShakeHand->Vendor,"<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>");
 #else
 			strcpy_s(pShakeHand->Name,sizeof(pShakeHand->Name),"Volumes");
-			strcpy_s(pShakeHand->Description,sizeof(pShakeHand->Description),"Windows VolumeProvider");
+			strcpy_s(pShakeHand->Description,sizeof(pShakeHand->Description),"weLees Windows VolumeProvider");
 			strcpy_s(pShakeHand->Vendor,sizeof(pShakeHand->Vendor),"<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>");
 #endif
 			break;
@@ -630,3 +639,343 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 	
 	return uErrorCode;
 }
+#else //_WIN32
+int PipeRun(IN char *pFormat,IN UINT uTimeout,OUT vector<char> &sRet)
+{
+	int       i,iRet,iSize,iHandle,iStatus;
+	char      szBuf[1024];
+	FILE      *file;
+	fd_set    rs;
+	timeval   tmv;
+	// format and write the data we were given
+	
+	file=popen(pFormat,"r");
+	if(!file)
+	{
+		return -1;
+	}
+
+	iHandle=fileno(file);
+	sRet.clear();
+	sRet.push_back(0);
+	if(!uTimeout)
+	{
+		uTimeout=-1;
+	}
+
+	for(i=0;(UINT)i<uTimeout;)
+	{
+		FD_ZERO(&rs);
+		FD_SET(iHandle,&rs);
+		
+		tmv.tv_usec = 0;
+		tmv.tv_sec  = 1;
+		iRet=select(iHandle+1,&rs,NULL,NULL,&tmv);
+		if(!iRet)
+		{
+			i++;
+			continue;
+		}
+		else if(iRet<0)
+		{
+			break;
+		}
+		iSize=read(iHandle,&szBuf,sizeof(szBuf-1));
+		if(iSize<=0)
+		{
+			break;
+		}
+		szBuf[iSize]=0;
+		iRet=sRet.size();
+		sRet.resize(iRet+iSize);
+		strncpy(&sRet[iRet-1],szBuf,iSize);
+	}
+	
+	if(i>=(int)uTimeout)
+	{
+		pclose(file);
+		return 0x7FFFFFFF; //timeout
+	}
+	
+	iStatus=pclose(file);
+	
+	if(!WIFEXITED(iStatus))
+	{
+		return 0x7FFFFFFE;
+	}
+	else
+	{
+		return WEXITSTATUS(iStatus);
+	}
+}
+
+
+vector<char*> g_Devices;
+
+
+UINT EnumerateDevices(void)
+{
+	int          i,j;
+	char         *p,*p2,*p3;
+	vector<char> sRet;
+	PipeRun((char*)"list=`fdisk -l|grep \"/dev\"|awk '{print $1}'|grep \"/dev/\"`;echo \"$list\"",1000,sRet);
+	p=&sRet[0];
+	while(p2=strchr(p,'\n'))
+	{
+		*p2=0;
+		if(p[0]!='/')
+		{
+			break;
+		}
+		p3=new char[p2-p+1];
+		strcpy(p3,p);
+		g_Devices.push_back(p3);
+		p=p2+1;
+	}
+	
+	for(i=0;i<(int)g_Devices.size();i++)
+	{//sort
+		for(j=i+1;j<(int)g_Devices.size();j++)
+		{
+			if(strcmp(g_Devices[i],g_Devices[j])>0)
+			{
+				p=g_Devices[i];
+				g_Devices[i]=g_Devices[j];
+				g_Devices[j]=p;
+			}
+		}
+	}
+}
+
+
+extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
+{
+	int                   i,j;
+	char                  szDeviceName[256];
+	UINT32                uErrorCode=0;
+	pthread_t             id;
+	PSHAKE_HAND           pShakeHand;
+	PENUM_DEVICE          pEnum;
+	PSEARCH_TASK          pTask;
+	vector<char>          sRet;
+	PSEARCH_PARAM         pSearch;
+	PACCESS_PARAM         pAccess;
+	struct hd_geometry    Geometry;
+	PQUERY_DEVICE_PROFILE pProfile;
+	
+	switch(uCommand)
+	{
+		case _COMMAND_SHAKE_HAND:
+			pShakeHand=(PSHAKE_HAND)pParameter;
+			pShakeHand->MajorVersion=3;
+			pShakeHand->MinorVersion=2;
+			pShakeHand->Features=_PROXY_FEATURE_WRITE|_PROXY_FEATURE_SEARCH;
+			pShakeHand->Type=_PROXY_TYPE_SOLID_DEVICE_PROVIDER;
+			strcpy(pShakeHand->Name,(PCHAR)"Parts");
+			strcpy(pShakeHand->Description,(PCHAR)"weLees Linux PartsProvider");
+			strcpy(pShakeHand->Vendor,"<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>");
+			break;
+		case _COMMAND_ENUM_DEVICE:
+			if(!g_Devices.size())
+			{
+				EnumerateDevices();
+			}
+			pEnum=(PENUM_DEVICE)pParameter;
+			pEnum->ReturnCount=0;
+			for(i=0;(i<pEnum->RequestCount)&&(i<(int)g_Devices.size());i++)
+			{
+				strcpy(pEnum->Result[i].Name,g_Devices[i]);
+				pEnum->Result[i].Folder=0;
+				sprintf(szDeviceName,"mount|grep \"%s\"|awk '{print $3}'",g_Devices[i]);
+				PipeRun(szDeviceName,1000,sRet);
+				if(sRet[0])
+				{
+					sRet[sRet.size()-2]=0;
+					sprintf(pEnum->Result[i].Desc,"%s(%s)",g_Devices[i],&sRet[0]);
+				}
+				else
+				{
+					strcpy(pEnum->Result[i].Desc,g_Devices[i]);
+				}
+				pEnum->Handle++;
+			}
+			pEnum->ReturnCount=i;
+			break;
+		case _COMMAND_GET_DEVICE_PROFILE:
+			pProfile=(PQUERY_DEVICE_PROFILE)pParameter;
+			strcpy(szDeviceName,pProfile->Name+1);
+			pProfile->Features=0;
+			i=open(szDeviceName,O_RDWR|O_CREAT,0777);
+			
+			if(ioctl(i,BLKSSZGET,&pProfile->SectorSize))
+			{
+				if(ioctl(i,BLKPBSZGET,&pProfile->SectorSize))
+				{
+					pProfile->SectorSize=512;
+				}
+			}
+			//The BLKSSZGET is used to get sector size of logical disk
+			//Use BLKPBSZGET to get sector size of physical disk
+			
+			ioctl(i,BLKGETSIZE64,&pProfile->Bytes);
+			//pProfile->Bytes*=pProfile->SectorSize;
+			
+			for(j=0;j<(int)g_Devices.size();j++)
+			{
+				if(!strcmp(g_Devices[j],szDeviceName))
+				{
+					break;
+				}
+			}
+			sprintf(pProfile->Description,"Disk %d<br>Device Name %s<br>",j,szDeviceName);
+			sprintf(szDeviceName,"mount|grep \"%s\"|awk '{print $3}'",pProfile->Name+1);
+			PipeRun(szDeviceName,1000,sRet);
+			if(sRet[0])
+			{
+				sRet[sRet.size()-2]=0;
+				sprintf(pProfile->Description+strlen(pProfile->Description),"Mount to path \\'%s\\'<br>Size ",&sRet[0]);
+			}
+			else
+			{
+				sprintf(pProfile->Description+strlen(pProfile->Description),"Unmounted Volume<br>Size ");
+			}
+			ShowSize(pProfile->Description+strlen(pProfile->Description),sizeof(pProfile->Description)-strlen(pProfile->Description),pProfile->Bytes,pProfile->SectorSize);
+			close(i);
+			break;
+		case _COMMAND_READ:
+			pAccess=(PACCESS_PARAM)pParameter;
+			strcpy(szDeviceName,pAccess->Name+1);
+			i=open(szDeviceName,O_RDWR,0777);
+			if(i<=0)
+			{
+				uErrorCode=errno;
+			}
+			else
+			{
+				lseek64(i,pAccess->ByteOffset,SEEK_SET);
+				j=read(i,pAccess->Buffer,pAccess->Size);
+				if(j<=0)
+				{
+					uErrorCode=errno;
+				}
+			}
+			close(i);
+			break;
+		case _COMMAND_WRITE:
+			pAccess=(PACCESS_PARAM)pParameter;
+			strcpy(szDeviceName,pAccess->Name+1);
+			i=open(szDeviceName,O_RDWR,0777);
+			if(i<=0)
+			{
+				uErrorCode=errno;
+			}
+			else
+			{
+				lseek64(i,pAccess->ByteOffset,SEEK_SET);
+				j=write(i,pAccess->Buffer,pAccess->Size);
+				if(j<=0)
+				{
+					uErrorCode=errno;
+				}
+			}
+			close(i);
+			break;
+		case _COMMAND_STOP_SERVER:
+			uErrorCode=0;
+			break;
+		case _COMMAND_SEARCH:
+			pSearch=(PSEARCH_PARAM)pParameter;
+			if(!pSearch->TaskID)
+			{
+				pSearch->Result=new SEARCH_RESULT;
+				if(!pSearch->Result)
+				{
+					uErrorCode=87;
+					break;
+				}
+				pTask=new SEARCH_TASK;
+				if(!pTask)
+				{
+					delete pSearch->Result;
+					pSearch->Result=NULL;
+					uErrorCode=87;
+					break;
+				}
+				else
+				{
+					pSearch->Result->TaskID=pSearch->TaskID=g_iSearchID++;
+					pthread_spin_init(&pSearch->Result->Lock,PTHREAD_PROCESS_PRIVATE);
+					pSearch->Result->Status=0;
+					pSearch->Result->ErrorCode=0;
+					pSearch->Result->CurrentOffset=pSearch->StartOffset;
+					pTask->Parameter=*pSearch;
+					g_SearchTask.push_back(pTask);
+					
+					pthread_create(&id,NULL,SearchRoutine,pTask);
+				}
+			}
+			else
+			{
+				for(i=0;i<(int)g_SearchTask.size();i++)
+				{
+					if(pSearch->TaskID==g_SearchTask[i]->Parameter.TaskID)
+					{
+						pTask=g_SearchTask[i];
+						break;
+					}
+				}
+				if(i>=(int)g_SearchTask.size())
+				{
+					uErrorCode=87;
+					break;
+				}
+				pSearch->Result=pTask->Parameter.Result;
+			}
+			
+			uErrorCode=pTask->Parameter.Result->ErrorCode;
+			break;
+		case _COMMAND_CLEAR_SEARCH_RESULT:
+			for(i=0;i<(int)g_SearchTask.size();i++)
+			{
+				if(g_SearchTask[i]->Parameter.TaskID==*((PUINT16)pParameter))
+				{
+					for(j=0;j<g_SearchTask[i]->Parameter.Result->MatchItems.size();j++)
+					{
+						delete g_SearchTask[i]->Parameter.Result->MatchItems[j].BlockData;
+						g_SearchTask[i]->Parameter.Result->MatchItems[j].CaseOffsetInBlock.clear();
+					}
+					g_SearchTask[i]->Parameter.Result->MatchItems.clear();
+					g_SearchTask[i]->Parameter.Result->MatchedCount=0;
+					break;
+				}
+			}
+			uErrorCode=0;
+			break;
+		case _COMMAND_CLOSE_SEARCH_TASK:
+			for(i=0;i<(int)g_SearchTask.size();i++)
+			{
+				if(g_SearchTask[i]->Parameter.TaskID==*((PUINT16)pParameter))
+				{
+					g_SearchTask[i]->Parameter.Result->Status|=_SEARCH_STATUS_STOPPING;
+					while(!(g_SearchTask[i]->Parameter.Result->Status&_SEARCH_STATUS_STOPPED))
+					{
+						sleep(1);
+					}
+					close(g_SearchTask[i]->Device);
+					delete g_SearchTask[i]->Parameter.Result;
+					delete g_SearchTask[i];
+					g_SearchTask.erase(g_SearchTask.begin()+i);
+					break;
+				}
+			}
+			uErrorCode=0;
+			break;
+		case _COMMAND_REPLACE_MODIFIED_FILE:
+		default:
+			uErrorCode=50;//ERROR_NOT_SUPPORTED
+			break;
+	}
+	
+	return uErrorCode;
+}
+#endif //_WIN32
