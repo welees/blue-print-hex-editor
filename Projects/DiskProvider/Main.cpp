@@ -6,8 +6,8 @@ typedef int BOOL;
 typedef char CHAR,*PCHAR;
 typedef unsigned short UINT16,*PUINT16;
 typedef unsigned char UINT8,*PUINT8;
-typedef unsigned int UINT32,*PUINT32,UINT,*PUINT;
-typedef unsigned long long UINT64,*PUINT64,ULONG,*PULONG;
+typedef unsigned int UINT32,*PUINT32,UINT,*PUINT,ULONG,*PULONG;
+typedef unsigned long long UINT64,*PUINT64;
 typedef long long INT64,*PINT64;
 typedef void *PVOID;
 
@@ -25,6 +25,7 @@ typedef void *PVOID;
 #include <unistd.h>
 #include <string.h>
 #include <pthread.h>
+#include <sys/wait.h>
 
 #endif //_WIN32
 
@@ -165,7 +166,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #endif //_WIN32
 	
 	pTask->Parameter.Result->MatchedCount=0;
-	pTask->InterBuffer.resize(32768);
+	pTask->InterBuffer.resize(1048576);
 	pTask->RemainOffset=0;
 	pTask->SearchPoint=&pTask->InterBuffer[0];
 	pTask->BufferSize=0;
@@ -215,7 +216,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 				pTask->BufferSize=pTask->RemainOffset+u;
 				if(uSearchSize<pTask->BufferSize)
 				{
-					pTask->BufferSize=uSearchSize;
+					pTask->BufferSize=(UINT)uSearchSize;
 				}
 			}
 			
@@ -260,7 +261,10 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #endif //_WIN32
 								pTask->Parameter.Result->MatchedCount++;
 								
-								pItem=&pTask->Parameter.Result->MatchItems[0];
+								if(pTask->Parameter.Result->MatchItems.size())
+								{
+									pItem=&pTask->Parameter.Result->MatchItems[0];
+								}
 								for(i=0;i<(int)pTask->Parameter.Result->MatchItems.size();i++)
 								{
 									if(pItem->BlockOffset==pSearch->StartOffset+ALIGN2DOWN(pTask->SearchPoint-&pTask->InterBuffer[0]-pTask->RemainOffset,pSearch->BlockSize))
@@ -612,6 +616,128 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 }
 
 #else //_WIN32
+int PipeRun(IN char *pFormat,IN UINT uTimeout,OUT vector<char> &sRet)
+{
+	int       i,iRet,iSize,iHandle,iStatus;
+	char      szBuf[1024];
+	FILE      *file;
+	fd_set    rs;
+	timeval   tmv;
+	// format and write the data we were given
+	
+	file=popen(pFormat,"r");
+	if(!file)
+	{
+		return -1;
+	}
+
+	iHandle=fileno(file);
+	sRet.clear();
+	sRet.push_back(0);
+	if(!uTimeout)
+	{
+		uTimeout=-1;
+	}
+
+	for(i=0;(UINT)i<uTimeout;)
+	{
+		FD_ZERO(&rs);
+		FD_SET(iHandle,&rs);
+		
+		tmv.tv_usec = 0;
+		tmv.tv_sec  = 1;
+		iRet=select(iHandle+1,&rs,NULL,NULL,&tmv);
+		if(!iRet)
+		{
+			i++;
+			continue;
+		}
+		else if(iRet<0)
+		{
+			break;
+		}
+		iSize=read(iHandle,&szBuf,sizeof(szBuf-1));
+		if(iSize<=0)
+		{
+			break;
+		}
+		szBuf[iSize]=0;
+		iRet=sRet.size();
+		sRet.resize(iRet+iSize);
+		strncpy(&sRet[iRet-1],szBuf,iSize);
+	}
+	
+	if(i>=(int)uTimeout)
+	{
+		pclose(file);
+		return 0x7FFFFFFF; //timeout
+	}
+	
+	iStatus=pclose(file);
+	
+	if(!WIFEXITED(iStatus))
+	{
+		return 0x7FFFFFFE;
+	}
+	else
+	{
+		return WEXITSTATUS(iStatus);
+	}
+}
+
+
+vector<char*> g_Devices;
+
+
+#define ENUM_DISK (PCHAR)\
+"cmd='fdisk -l';" \
+"title=`$cmd |grep dev|head -1|awk '{print $1}'`;" \
+"list=`$cmd |grep $title|grep dev|awk '{print $2}'|sed 's/://'|sed '/\\/dev\\/ram/d'|sed '/\\/dev\\/loop/d'`;" \
+"result='';" \
+"for dev in `ls /dev/`; do " \
+"check=`echo $list|grep \"/dev/$dev\"`;" \
+"[ \"$check\" != \"\" ] && " \
+"[ ! -d /dev/$dev ] && " \
+"result=`echo \"/dev/$dev $result\"`;" \
+"done;echo $result"
+
+
+UINT EnumerateDevices(void)
+{
+	int          i,j;
+	char         *p,*p2,*p3;
+	vector<char> sRet;
+	PipeRun(ENUM_DISK,1000,sRet);
+	p=&sRet[0];
+	p[sRet.size()-2]=' ';
+	while(p2=strchr(p,' '))
+	{
+		*p2=0;
+		if(p[0]!='/')
+		{
+			break;
+		}
+		p3=new char[p2-p+1];
+		strcpy(p3,p);
+		g_Devices.push_back(p3);
+		p=p2+1;
+	}
+	
+	for(i=0;i<(int)g_Devices.size();i++)
+	{//sort
+		for(j=i+1;j<(int)g_Devices.size();j++)
+		{
+			if(strcmp(g_Devices[i],g_Devices[j])>0)
+			{
+				p=g_Devices[i];
+				g_Devices[i]=g_Devices[j];
+				g_Devices[j]=p;
+			}
+		}
+	}
+}
+
+
 extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 {
 	int                   i,j;
@@ -635,24 +761,21 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			pShakeHand->Features=_PROXY_FEATURE_WRITE|_PROXY_FEATURE_SEARCH;
 			pShakeHand->Type=_PROXY_TYPE_SOLID_DEVICE_PROVIDER;
 			strcpy(pShakeHand->Name,(PCHAR)"Disks");
-			strcpy(pShakeHand->Description,(PCHAR)"Linux DiskProvider");
+			strcpy(pShakeHand->Description,(PCHAR)"weLees Linux DiskProvider");
 			strcpy(pShakeHand->Vendor,"<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>");
 			break;
 		case _COMMAND_ENUM_DEVICE:
+			if(!g_Devices.size())
+			{
+				EnumerateDevices();
+			}
 			pEnum=(PENUM_DEVICE)pParameter;
 			pEnum->ReturnCount=0;
-			for(i=0;i<pEnum->RequestCount;i++)
+			for(i=0;(i<pEnum->RequestCount)&&(i<(int)g_Devices.size());i++)
 			{
-				sprintf(szDeviceName+7,"%c",(int)pEnum->Handle+'a');
-				j=open(szDeviceName,O_RDWR);
-				if(j<=0)
-				{
-					break;
-				}
-				close(j);
-				strcpy(pEnum->Result[i].Name,szDeviceName);
+				strcpy(pEnum->Result[i].Name,g_Devices[i]);
 				pEnum->Result[i].Folder=0;
-				sprintf(pEnum->Result[i].Desc,"Disk %d",(int)pEnum->Handle+1);
+				sprintf(pEnum->Result[i].Desc,"Disk %d (%s)",i,g_Devices[i]);
 				pEnum->Handle++;
 			}
 			pEnum->ReturnCount=i;
@@ -676,7 +799,13 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			ioctl(i,BLKGETSIZE64,&pProfile->Bytes);
 			//pProfile->Bytes*=pProfile->SectorSize;
 			
-			j=szDeviceName[7]-'a'+1;
+			for(j=0;j<(int)g_Devices.size();j++)
+			{
+				if(!strcmp(g_Devices[j],szDeviceName))
+				{
+					break;
+				}
+			}
 			sprintf(pProfile->Description,"Disk %d<br>Device Name %s<br>Size ",j,pProfile->Name+1);
 			ShowSize(pProfile->Description+strlen(pProfile->Description),sizeof(pProfile->Description)-strlen(pProfile->Description),pProfile->Bytes,pProfile->SectorSize);
 			close(i);
