@@ -163,7 +163,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #endif //_WIN32
 	
 	pTask->Parameter.Result->MatchedCount=0;
-	pTask->InterBuffer.resize(32768);
+	pTask->InterBuffer.resize(1048576);
 	pTask->RemainOffset=0;
 	pTask->SearchPoint=&pTask->InterBuffer[0];
 	pTask->BufferSize=0;
@@ -213,7 +213,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 				pTask->BufferSize=pTask->RemainOffset+u;
 				if(uSearchSize<pTask->BufferSize)
 				{
-					pTask->BufferSize=uSearchSize;
+					pTask->BufferSize=(UINT)uSearchSize;
 				}
 			}
 			
@@ -258,7 +258,10 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #endif //_WIN32
 								pTask->Parameter.Result->MatchedCount++;
 								
-								pItem=&pTask->Parameter.Result->MatchItems[0];
+								if(pTask->Parameter.Result->MatchItems.size())
+								{
+									pItem=&pTask->Parameter.Result->MatchItems[0];
+								}
 								for(i=0;i<(int)pTask->Parameter.Result->MatchItems.size();i++)
 								{
 									if(pItem->BlockOffset==pSearch->StartOffset+ALIGN2DOWN(pTask->SearchPoint-&pTask->InterBuffer[0]-pTask->RemainOffset,pSearch->BlockSize))
@@ -728,7 +731,7 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 			pShakeHand->Type=_PROXY_TYPE_SOLID_DEVICE_PROVIDER;
 #if _MSC_VER<1300
 			strcpy(pShakeHand->Name,"Files");
-			strcpy(pShakeHand->Description,"Windows FileProvider");
+			strcpy(pShakeHand->Description,"weLees Windows FileProvider");
 			strcpy(pShakeHand->Vendor,"<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>");
 #else
 			strcpy_s(pShakeHand->Name,sizeof(pShakeHand->Name),"Files");
