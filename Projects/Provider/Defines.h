@@ -37,7 +37,7 @@ Revision History:
 #endif //BOOLEAN
 
 
-#define _WBDP_MAJOR 1    //weLees Blue Print Data Provider Protocol 1.0
+#define _WBDP_MAJOR 2    //weLees Blue Print Data Provider Protocol 2.1
 #define _WBDP_MINOR 1
 
 
@@ -52,11 +52,11 @@ typedef struct _SHAKE_HAND
                                        //       The provider returns the protocol version number used by the provider
 	
 	UINT32 Features;
-#define _PROXY_FEATURE_WRITE  1        //OUT  User can write data into objects
-#define _PROXY_FEATURE_SEARCH 2        //OUT  User can do searching operation in objects
+// #define _PROVIDER_FEATURE_WRITE  1        //OUT  User can write data into objects
+// #define _PROVIDER_FEATURE_SEARCH 2        //OUT  User can do searching operation in objects
 	UINT16 Type;
-#define _PROXY_TYPE_SOLID_DEVICE_PROVIDER     1  //The data of object provided by current provider is solid for long time, such as disk/file
-#define _PROXY_TYPE_VIOLATILE_DEVICE_PROVIDER 2  //The data of object provided by current provider is volatile for one time, such as networks package
+#define _PROVIDER_TYPE_SOLID_DEVICE_PROVIDER     1  //The data of object provided by current provider is solid for long time, such as disk/file
+#define _PROVIDER_TYPE_VIOLATILE_DEVICE_PROVIDER 2  //The data of object provided by current provider is volatile for one time, such as networks package
 	CHAR   Name[32];                   //OUT  Name of provider
 	CHAR   Description[256];           //OUT  Provider description
 	CHAR   Vendor[256];                //OUT  Vendor of provider
@@ -66,7 +66,6 @@ typedef struct _SHAKE_HAND
 #define _COMMAND_ENUM_DEVICE           1  //To enum objects belongs to provider
 typedef struct _DEVICE_NAME
 {
-//	UINT32 ID;                         //OUT   To identify an object uniquely, it is provided by provider, the editor will access object with it
 	char    Name[256];
 	char    Desc[1024];                 //OUT   Object showing name, such as "Disk X" / "Volume X" or filename.
 	BOOLEAN Folder;                     //OUT   If the object is a folder
@@ -76,7 +75,7 @@ typedef struct _DEVICE_NAME
 //weLees editor send this structure to enumerate object
 typedef struct _ENUM_DEVICE
 {
-	CHAR        Path[1024];           //IN     The path user want to enumerate, for non-first enumerating, this parameter maybe empty
+	CHAR        Path[1024];           //IN     The path user want to enumerate, for non-first enumerating, this parameter maybe empty for continue enumerating
 	UINT64      Handle;               //IN OUT The enumerating handle, it defined by provider, the editor just use it. The editor/provider use it to continue enumerating. provider should update it with enumerating operation return.
 	UINT16      RequestCount;         //IN     Object count that the editor queried.
 	UINT16      ReturnCount;          //OUT    The count of objects returned by provider.
@@ -89,15 +88,17 @@ typedef struct _ENUM_DEVICE
 
 typedef struct _QUERY_DEVICE_PROFILE
 {
-	char   Name[1024];                 //IN    The id of object returned in DEVICE_NAME::ID
-	UINT64 Bytes;                      //OUT   The total size in bytes of object
-	UINT32 SectorSize;                 //OUT   The sector/block size of object, it should be set to 1 for character object
+	char   Name[1024];                 //IN    The full path of object
+	UINT64 TotalBytes;                 //OUT   The total size in bytes of object
+	UINT32 BlockSize;                  //OUT   The sector/block size of object, it should be set to 1 for character object
 	UINT32 Features;
 #define _DEVICE_FEATURE_BLOCK_DEVICE   1
 #define _DEVICE_FEATURE_RESIZABLE      2
 #define _DEVICE_FEATURE_READ_ONLY      4
 #define _DEVICE_FEATURE_VOLATILE       8
+#define _DEVICE_FEATURE_SEARCH         16
 	char   Description[1024];          //OUT   Object information
+	char   InitializeParameters[4096]; //OUT  for protocol 2.1, add initializing parameter for structure parser
 }QUERY_DEVICE_PROFILE,*PQUERY_DEVICE_PROFILE;
 
 
@@ -108,7 +109,7 @@ typedef struct _QUERY_DEVICE_PROFILE
 //The read/write operation use the same structure
 typedef struct _ACCESS_PARAM
 {
-	char   Name[1024];                 //IN    The id of object returned in DEVICE_NAME::ID
+	char   Name[1024];                 //IN    The full path file name of object/file
 	UINT64 ByteOffset;                 //IN    The byte offset of data will be read/write
 	PUINT8 Buffer;                     //IN    The data
 	UINT32 Size;                       //IN    The size of data will be handled
@@ -120,9 +121,9 @@ typedef struct _ACCESS_PARAM
 
 typedef struct _SEARCH_ITEM
 {
-	UINT64       BlockOffset;
-	vector<UINT> CaseOffsetInBlock;
-	PUINT8       BlockData;
+	UINT64         BlockOffset;
+	vector<UINT32> CaseOffsetInBlock;
+	PUINT8         BlockData;
 }SEARCH_ITEM,*PSEARCH_ITEM;
 
 
@@ -130,35 +131,39 @@ typedef struct _SEARCH_RESULT
 {
 	UINT64              CurrentOffset; //OUT   The searching position
 	UINT32              ErrorCode;
-	UINT16              TaskID;        //OUT   The searching ID, front-end should use it to query result
+	UINT16              TaskID;        //OUT   The searching task ID, front-end should use it to query result
 	UINT8               Status;        //OUT   1 means search operation stopped
 #define _SEARCH_STATUS_STOPPED  1      //Searching task stopped
 #define _SEARCH_STATUS_STOPPING 2      //Searching task is been stopping
 	UINT8               MatchedCount;
 	vector<SEARCH_ITEM> MatchItems;
-#ifdef _WIN32
+#if defined(_WIN32)
 	LONG                Lock;
-#else //_WIN32
+#endif
+#if defined(_LINUX)
 	pthread_spinlock_t  Lock;
-#endif //_WIN32
+#endif
+#if defined(_MACOS)
+	pthread_mutex_t     Lock;
+#endif
 }SEARCH_RESULT,*PSEARCH_RESULT;
 
 
 typedef struct _SEARCH_PARAM
 {
-	vector<char>   DeviceName;                //The id of object returned in DEVICE_NAME::ID
-	UINT16         Features;
+	vector<char>   DeviceName;                //IN    The full path file name of object/file
+	UINT16         Features;                  //IN    Searching request
 #define _SEARCH_FEATURE_IGNORE_CASE        1  //The data need to be search is string and ignore the case
 #define _SEARCH_FEATURE_SPECIFIED_POSITION 2  //To search specified position in block, such as search string at header of block(user specified)
 #define _SEARCH_FEATURE_SPECIFIED_SECTION  4  //To search specified section in block, such as search string from header of block(user specified)
 #define _SEARCH_FEATURE_REG_FORMAT         8  //
 	
-	UINT64         StartOffset,LastOffset;    //Searching range, the unit of both of them is byte
-	UINT32         BlockSize;                 //Only for _SEARCH_FEATURE_SPECIFIED_MEMBER, to search data in certain position of block
-	UINT32         OffsetInBlock;             //Search from specified offset in block(search part of block)
-	UINT16         DataSize;                  //size of data for searching
-	UINT16         TaskID;                    //The searching ID, front-end should use it to query result, 0 means new task
-	vector<UINT8>  Data;                      //data for searching
+	UINT64         StartOffset,LastOffset;    //IN    Searching range, the unit of both of them is byte
+	UINT32         BlockSize;                 //IN    Only for _SEARCH_FEATURE_SPECIFIED_XXX, to search data in certain position of block
+	UINT32         OffsetInBlock;             //IN    Search from specified offset in block(search part of block)
+	UINT16         DataSize;                  //IN    size of data for searching
+	UINT16         TaskID;                    //IN    The searching task ID, front-end should use it to query result, 0 means new task
+	vector<UINT8>  Data;                      //IN    data for searching
 	PSEARCH_RESULT Result;
 }SEARCH_PARAM,*PSEARCH_PARAM;
 
