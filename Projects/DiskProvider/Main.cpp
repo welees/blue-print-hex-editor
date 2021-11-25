@@ -1,6 +1,8 @@
 #ifdef _WIN32
 #include <Windows.h>
 #include <WinIoCtl.h>
+
+#define PROVIDER_DESCRIPTION (PCHAR)"weLees Windows DiskProvider"
 #else //_WIN32
 typedef int BOOL;
 typedef char CHAR,*PCHAR;
@@ -15,13 +17,20 @@ typedef void *PVOID;
 #define OUT
 #define APIENTRY
 
-
+#ifndef _MACOS
+#define PROVIDER_DESCRIPTION (PCHAR)"weLees Linux DiskProvider"
 #include <linux/fs.h>
+#include <linux/hdreg.h>
+#else //_MACOS
+#define OutputDebugString printf
+#define lseek64 lseek
+#define PROVIDER_DESCRIPTION (PCHAR)"weLees Apple OSX DiskProvider"
+#include <sys/disk.h>
+#endif //_MACOS
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <stdio.h>
 #include <errno.h>
-#include <linux/hdreg.h>
 #include <unistd.h>
 #include <string.h>
 #include <pthread.h>
@@ -34,6 +43,8 @@ typedef void *PVOID;
 using namespace std;
 #include "../Provider/Defines.h"
 
+
+#define PROVIDER_VENDOR "<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>"
 
 typedef struct _SIZE_DESC
 {
@@ -79,14 +90,14 @@ PUINT8 SearchByte(IN PUINT8 pBuffer,IN UINT uSize,IN UINT8 uData,OUT PUINT pSize
 	{
 		if(*pBuffer==uData)
 		{
-			*pSize=pBuffer-p;
+			*pSize=(UINT)(pBuffer-p);
 			return pBuffer;
 		}
 		pBuffer++;
 		uSize--;
 	}
 	
-	*pSize=pBuffer-p;
+	*pSize=(UINT)(pBuffer-p);
 	return NULL;
 }
 
@@ -145,8 +156,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 			pSearch->DeviceName[i]='\\';
 		}
 	}
-#endif //_WIN32
-#ifdef _WIN32
+	
 	pTask->Device=CreateFile(&pSearch->DeviceName[1],GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,0,NULL);
 	if(INVALID_HANDLE_VALUE==pTask->Device)
 	{
@@ -171,7 +181,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 	pTask->SearchPoint=&pTask->InterBuffer[0];
 	pTask->BufferSize=0;
 	uSearchSize=pSearch->LastOffset-pSearch->StartOffset;
-	pTask->OffsetInBlock=pSearch->StartOffset%(pTask->InterBuffer.size()>>1);
+	pTask->OffsetInBlock=(UINT)(pSearch->StartOffset%(pTask->InterBuffer.size()>>1));
 	pTask->Parameter.StartOffset-=pTask->OffsetInBlock;
 	pTask->SearchPoint=&pTask->InterBuffer[0]+pTask->OffsetInBlock;
 #ifdef _WIN32
@@ -192,14 +202,18 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #ifdef _DEBUG
 				{
 					char sz[256];
+#ifdef _MACOS
+					sprintf(sz,"Read offset %llXH.\n",pSearch->StartOffset);
+#else //_MACOS
 					sprintf(sz,"Read offset %I64XH.\n",pSearch->StartOffset);
+#endif //MACOS
 					OutputDebugString(sz);
 				}
 #endif //_DEBUG
 #ifdef _WIN32
 				if(!ReadFile(pTask->Device,&pTask->InterBuffer[0]+pTask->RemainOffset,pTask->InterBuffer.size()>>1,&u,NULL))
 #else //_WIN32
-				u=i=read(pTask->Device,&pTask->InterBuffer[0]+pTask->RemainOffset,pTask->InterBuffer.size()>>1);
+				u=i=(int)read(pTask->Device,&pTask->InterBuffer[0]+pTask->RemainOffset,(int)(pTask->InterBuffer.size()>>1));
 				if(i<=0)
 #endif //_WIN32
 				{
@@ -257,7 +271,11 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #ifdef _WIN32
 								while(InterlockedExchange(&pTask->Parameter.Result->Lock,1));
 #else //_WIN32
+#ifdef _MACOS
+								pthread_mutex_lock(&pTask->Parameter.Result->Lock);
+#else //_MACOS
 								pthread_spin_lock(&pTask->Parameter.Result->Lock);
+#endif //_MACOS
 #endif //_WIN32
 								pTask->Parameter.Result->MatchedCount++;
 								
@@ -291,7 +309,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 								}
 								
 								pItem->CaseOffsetInBlock.push_back((pTask->SearchPoint-&pTask->InterBuffer[0]-pTask->RemainOffset)%pSearch->BlockSize);
-#ifdef _DEBUG
+#if defined(_DEBUG)&&defined(_WIN32)
 								{
 									char sz[256];
 									sprintf(sz,"The matched count in block %I64XH is %d, Match offset %XH.\n",pItem->BlockOffset,pItem->CaseOffsetInBlock.size(),*(pItem->CaseOffsetInBlock.end()-1));
@@ -302,7 +320,11 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #ifdef _WIN32
 								InterlockedExchange(&pTask->Parameter.Result->Lock,0);
 #else //_WIN32
+#ifdef _MACOS
+								pthread_mutex_unlock(&pTask->Parameter.Result->Lock);
+#else //_WIN32
 								pthread_spin_unlock(&pTask->Parameter.Result->Lock);
+#endif //_MACOS
 #endif //_WIN32
 								pTask->SearchPoint+=pSearch->DataSize;
 								pTask->BufferSize-=pSearch->DataSize;
@@ -371,16 +393,16 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 			pShakeHand=(PSHAKE_HAND)pParameter;
 			pShakeHand->MajorVersion=3;
 			pShakeHand->MinorVersion=2;
-			pShakeHand->Features=_PROXY_FEATURE_WRITE|_PROXY_FEATURE_SEARCH;
-			pShakeHand->Type=_PROXY_TYPE_SOLID_DEVICE_PROVIDER;
+			pShakeHand->Features=0;
+			pShakeHand->Type=_PROVIDER_TYPE_SOLID_DEVICE_PROVIDER;
 #if _MSC_VER<1300
 			strcpy(pShakeHand->Name,"Disks");
-			strcpy(pShakeHand->Description,"Windows DiskProvider");
-			strcpy(pShakeHand->Vendor,"<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>");
+			strcpy(pShakeHand->Description,PROVIDER_DESCRIPTION);
+			strcpy(pShakeHand->Vendor,PROVIDER_VENDOR);
 #else
 			strcpy_s(pShakeHand->Name,sizeof(pShakeHand->Name),"Disks");
-			strcpy_s(pShakeHand->Description,sizeof(pShakeHand->Description),"Windows DiskProvider");
-			strcpy_s(pShakeHand->Vendor,sizeof(pShakeHand->Vendor),"<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>");
+			strcpy_s(pShakeHand->Description,sizeof(pShakeHand->Description),PROVIDER_DESCRIPTION);
+			strcpy_s(pShakeHand->Vendor,sizeof(pShakeHand->Vendor),PROVIDER_VENDOR);
 #endif
 			break;
 		case _COMMAND_ENUM_DEVICE:
@@ -436,31 +458,34 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 				if(DeviceIoControl(hDevice,IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
 					NULL,0,Data.Pad,sizeof(Data.Pad),&u,NULL))
 				{
-					pProfile->SectorSize = Data.Geometry.Geometry.BytesPerSector;
-					pProfile->Bytes      = Data.Geometry.DiskSize.QuadPart;
+					pProfile->BlockSize  = Data.Geometry.Geometry.BytesPerSector;
+					pProfile->TotalBytes = Data.Geometry.DiskSize.QuadPart;
 				}
 				else
 				{
 					uErrorCode=GetLastError();
-					CloseHandle(hDevice);
-					hDevice=CreateFile(szDeviceName,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,0,NULL);
-					if(INVALID_HANDLE_VALUE!=hDevice)
-					{
-						pProfile->Features|=_PROXY_FEATURE_WRITE;
-					}
-					pProfile->Features|=_PROXY_FEATURE_SEARCH;
-					//LOG_ERR("Get profile of device %s fail, error code %XH.\r\n",m_pDeviceName,GetLastError());
+					break;
 				}
+				CloseHandle(hDevice);
+				hDevice=CreateFile(szDeviceName,GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,0,NULL);
+				if(INVALID_HANDLE_VALUE==hDevice)
+				{
+					pProfile->Features|=_DEVICE_FEATURE_READ_ONLY;
+				}
+				pProfile->Features|=_DEVICE_FEATURE_BLOCK_DEVICE|_DEVICE_FEATURE_SEARCH;
+				//LOG_ERR("Get profile of device %s fail, error code %XH.\r\n",m_pDeviceName,GetLastError());
 #if _MSC_VER<1300
+				sprintf(pProfile->InitializeParameters,"{Features:'%X',SectorSize:'%X',TotalSectors:'%I64X'}",pProfile->Features,pProfile->BlockSize,pProfile->TotalBytes/pProfile->BlockSize);
 				sscanf(szDeviceName+18,"%d",&i);
 				sprintf(pProfile->Description,"Disk %d<br>Device Name %s<br>Size ",++i,pProfile->Name);
 #else
+				sprintf_s(pProfile->InitializeParameters,sizeof(pProfile->InitializeParameters),"{Features:'%X',SectorSize:'%X',TotalSectors:'%I64X'}",pProfile->Features,pProfile->BlockSize,pProfile->TotalBytes/pProfile->BlockSize);
 				sscanf_s(szDeviceName+18,"%d",&i);
 				sprintf_s(pProfile->Description,sizeof(pProfile->Description),"Disk %d<br>Device Name %s<br>Size ",++i,pProfile->Name);
 #endif
-				ShowSize(pProfile->Description+strlen(pProfile->Description),sizeof(pProfile->Description)-strlen(pProfile->Description),pProfile->Bytes,pProfile->SectorSize);
+				ShowSize(pProfile->Description+strlen(pProfile->Description),sizeof(pProfile->Description)-strlen(pProfile->Description),pProfile->TotalBytes,pProfile->BlockSize);
+				CloseHandle(hDevice);
 			}
-			CloseHandle(hDevice);
 			break;
 		case _COMMAND_READ:
 			pAccess=(PACCESS_PARAM)pParameter;
@@ -488,8 +513,8 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 				{
 					uErrorCode=GetLastError();
 				}
+				CloseHandle(hDevice);
 			}
-			CloseHandle(hDevice);
 			break;
 		case _COMMAND_WRITE:
 			pAccess=(PACCESS_PARAM)pParameter;
@@ -517,8 +542,8 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 				{
 					uErrorCode=GetLastError();
 				}
+				CloseHandle(hDevice);
 			}
-			CloseHandle(hDevice);
 			break;
 		case _COMMAND_SEARCH:
 			pSearch=(PSEARCH_PARAM)pParameter;
@@ -656,13 +681,13 @@ int PipeRun(IN char *pFormat,IN UINT uTimeout,OUT vector<char> &sRet)
 		{
 			break;
 		}
-		iSize=read(iHandle,&szBuf,sizeof(szBuf-1));
+		iSize=(int)read(iHandle,&szBuf,(int)(sizeof(szBuf)-1));
 		if(iSize<=0)
 		{
 			break;
 		}
 		szBuf[iSize]=0;
-		iRet=sRet.size();
+		iRet=(int)sRet.size();
 		sRet.resize(iRet+iSize);
 		strncpy(&sRet[iRet-1],szBuf,iSize);
 	}
@@ -689,7 +714,8 @@ int PipeRun(IN char *pFormat,IN UINT uTimeout,OUT vector<char> &sRet)
 vector<char*> g_Devices;
 
 
-#define ENUM_DISK (PCHAR)\
+#ifdef _LINUX
+#define ENUM_DISK (PCHAR) \
 "cmd='fdisk -l';" \
 "title=`$cmd |grep dev|head -1|awk '{print $1}'`;" \
 "list=`$cmd |grep $title|grep dev|awk '{print $2}'|sed 's/://'|sed '/\\/dev\\/ram/d'|sed '/\\/dev\\/loop/d'`;" \
@@ -700,6 +726,10 @@ vector<char*> g_Devices;
 "[ ! -d /dev/$dev ] && " \
 "result=`echo \"/dev/$dev $result\"`;" \
 "done;echo $result"
+#endif //_LINUX
+#ifdef _MACOS
+#define ENUM_DISK (PCHAR)"diskutil list|grep '/dev/'|awk '{print $1}'|sed 's@/dev/@/dev/r@'"
+#endif //_MACOS
 
 
 UINT EnumerateDevices(void)
@@ -709,6 +739,13 @@ UINT EnumerateDevices(void)
 	vector<char> sRet;
 	PipeRun(ENUM_DISK,1000,sRet);
 	p=&sRet[0];
+	for(i=0;p[i];i++)
+	{
+		if((p[i]=='\n')||(p[i]=='\r')||(p[i]=='\t'))
+		{
+			p[i]=' ';
+		}
+	}
 	p[sRet.size()-2]=' ';
 	while(p2=strchr(p,' '))
 	{
@@ -735,13 +772,15 @@ UINT EnumerateDevices(void)
 			}
 		}
 	}
+	
+	return 0;
 }
 
 
 extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 {
 	int                   i,j;
-	char                  szDeviceName[]="/dev/sd   ";
+	char                  szDeviceName[256];
 	UINT32                uErrorCode=0;
 	pthread_t             id;
 	PSHAKE_HAND           pShakeHand;
@@ -749,7 +788,9 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 	PSEARCH_TASK          pTask;
 	PSEARCH_PARAM         pSearch;
 	PACCESS_PARAM         pAccess;
+#ifndef _MACOS
 	struct hd_geometry    Geometry;
+#endif //_MACOS
 	PQUERY_DEVICE_PROFILE pProfile;
 	
 	switch(uCommand)
@@ -758,11 +799,11 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			pShakeHand=(PSHAKE_HAND)pParameter;
 			pShakeHand->MajorVersion=3;
 			pShakeHand->MinorVersion=2;
-			pShakeHand->Features=_PROXY_FEATURE_WRITE|_PROXY_FEATURE_SEARCH;
-			pShakeHand->Type=_PROXY_TYPE_SOLID_DEVICE_PROVIDER;
+			pShakeHand->Features=0;
+			pShakeHand->Type=_PROVIDER_TYPE_SOLID_DEVICE_PROVIDER;
 			strcpy(pShakeHand->Name,(PCHAR)"Disks");
-			strcpy(pShakeHand->Description,(PCHAR)"weLees Linux DiskProvider");
-			strcpy(pShakeHand->Vendor,"<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>");
+			strcpy(pShakeHand->Description,PROVIDER_DESCRIPTION);
+			strcpy(pShakeHand->Vendor,PROVIDER_VENDOR);
 			break;
 		case _COMMAND_ENUM_DEVICE:
 			if(!g_Devices.size())
@@ -783,20 +824,47 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 		case _COMMAND_GET_DEVICE_PROFILE:
 			pProfile=(PQUERY_DEVICE_PROFILE)pParameter;
 			strcpy(szDeviceName,pProfile->Name+1);
-			pProfile->Features=0;
-			i=open(szDeviceName,O_RDWR|O_CREAT,0777);
-			
-			if(ioctl(i,BLKSSZGET,&pProfile->SectorSize))
+			pProfile->Features|=_DEVICE_FEATURE_BLOCK_DEVICE|_DEVICE_FEATURE_SEARCH;
+			i=open(szDeviceName,O_RDWR);
+			if(i<=0)
 			{
-				if(ioctl(i,BLKPBSZGET,&pProfile->SectorSize))
+				pProfile->Features|=_DEVICE_FEATURE_READ_ONLY;
+			}
+			else
+			{
+				i=open(szDeviceName,O_RDONLY);
+			}
+			if(i<=0)
+			{
+				uErrorCode=errno;
+				strcpy(pProfile->InitializeParameters,"{}");
+				break;
+			}
+			
+#ifdef _MACOS
+			if(-1==ioctl(i,DKIOCGETBLOCKSIZE,&pProfile->BlockSize))
+			{
+				pProfile->BlockSize=512;
+			}
+			
+			if(-1==ioctl(i,DKIOCGETBLOCKCOUNT,&pProfile->TotalBytes))
+			{
+				pProfile->TotalBytes=0x10000;
+			}
+			pProfile->TotalBytes*=pProfile->BlockSize;
+#else //_MACOS
+			if(ioctl(i,BLKSSZGET,&pProfile->BlockSize))
+			{
+				if(ioctl(i,BLKPBSZGET,&pProfile->BlockSize))
 				{
-					pProfile->SectorSize=512;
+					pProfile->BlockSize=512;
 				}
 			}
 			//The BLKSSZGET is used to get sector size of logical disk
 			//Use BLKPBSZGET to get sector size of physical disk
 			
-			ioctl(i,BLKGETSIZE64,&pProfile->Bytes);
+			ioctl(i,BLKGETSIZE64,&pProfile->TotalBytes);
+#endif //_MACOS
 			//pProfile->Bytes*=pProfile->SectorSize;
 			
 			for(j=0;j<(int)g_Devices.size();j++)
@@ -807,13 +875,14 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 				}
 			}
 			sprintf(pProfile->Description,"Disk %d<br>Device Name %s<br>Size ",j,pProfile->Name+1);
-			ShowSize(pProfile->Description+strlen(pProfile->Description),sizeof(pProfile->Description)-strlen(pProfile->Description),pProfile->Bytes,pProfile->SectorSize);
+			ShowSize(pProfile->Description+strlen(pProfile->Description),(int)(sizeof(pProfile->Description)-strlen(pProfile->Description)),pProfile->TotalBytes,pProfile->BlockSize);
+			sprintf(pProfile->InitializeParameters,"{Features:'%X',SectorSize:'%X',TotalSectors:'%llX'}",pProfile->Features,pProfile->BlockSize,pProfile->TotalBytes/pProfile->BlockSize);
 			close(i);
 			break;
 		case _COMMAND_READ:
 			pAccess=(PACCESS_PARAM)pParameter;
 			strcpy(szDeviceName,pAccess->Name+1);
-			i=open(szDeviceName,O_RDWR,0777);
+			i=open(szDeviceName,O_RDONLY);
 			if(i<=0)
 			{
 				uErrorCode=errno;
@@ -821,18 +890,18 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			else
 			{
 				lseek64(i,pAccess->ByteOffset,SEEK_SET);
-				j=read(i,pAccess->Buffer,pAccess->Size);
+				j=(int)read(i,pAccess->Buffer,pAccess->Size);
 				if(j<=0)
 				{
 					uErrorCode=errno;
 				}
+				close(i);
 			}
-			close(i);
 			break;
 		case _COMMAND_WRITE:
 			pAccess=(PACCESS_PARAM)pParameter;
 			strcpy(szDeviceName,pAccess->Name+1);
-			i=open(szDeviceName,O_RDWR,0777);
+			i=open(szDeviceName,O_RDWR);
 			if(i<=0)
 			{
 				uErrorCode=errno;
@@ -840,13 +909,13 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			else
 			{
 				lseek64(i,pAccess->ByteOffset,SEEK_SET);
-				j=write(i,pAccess->Buffer,pAccess->Size);
+				j=(int)write(i,pAccess->Buffer,pAccess->Size);
 				if(j<=0)
 				{
 					uErrorCode=errno;
 				}
+				close(i);
 			}
-			close(i);
 			break;
 		case _COMMAND_STOP_SERVER:
 			uErrorCode=0;
@@ -872,7 +941,11 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 				else
 				{
 					pSearch->Result->TaskID=pSearch->TaskID=g_iSearchID++;
+#ifdef _MACOS
+					pthread_mutex_init(&pSearch->Result->Lock,NULL);
+#else //_MACOS
 					pthread_spin_init(&pSearch->Result->Lock,PTHREAD_PROCESS_PRIVATE);
+#endif //_MACOS
 					pSearch->Result->Status=0;
 					pSearch->Result->ErrorCode=0;
 					pSearch->Result->CurrentOffset=pSearch->StartOffset;
@@ -944,7 +1017,14 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			break;
 	}
 	
+	if(uErrorCode==EACCES)
+	{
+		uErrorCode=5;
+	}
+	else if(uErrorCode==EBUSY)
+	{
+		uErrorCode=142;//ERROR_BUSY_DRIVE
+	}
 	return uErrorCode;
 }
 #endif //_WIN32
-
