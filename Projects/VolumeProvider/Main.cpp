@@ -15,13 +15,20 @@ typedef void *PVOID;
 #define OUT
 #define APIENTRY
 
-
+#ifdef _LINUX
 #include <linux/fs.h>
+#include <linux/hdreg.h>
+#endif //_LINUX
+#ifdef _MACOS
+#include <sys/disk.h>
+#define lseek64 lseek
+#define pthread_spin_lock pthread_mutex_lock
+#define pthread_spin_unlock pthread_mutex_unlock
+#endif //_MACOS
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <stdio.h>
 #include <errno.h>
-#include <linux/hdreg.h>
 #include <unistd.h>
 #include <string.h>
 #include <pthread.h>
@@ -34,6 +41,22 @@ typedef void *PVOID;
 using namespace std;
 #include "../Provider/Defines.h"
 
+
+#define PROVIDER_VENDOR "<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>"
+#ifdef _WIN32
+#define PROVIDER_DESCRIPTION "weLees Windows VolumesProvider"
+#endif //_WIN32
+#ifdef _LINUX
+#define PROVIDER_DESCRIPTION "weLees Linux PartsProvider"
+#define MOUNT_COMMAND (char*)"mount|grep '/dev'|awk '{print $1\" \"$3}'"
+#define ENUM_METHOD (char*)"list=`fdisk -l|grep \"/dev\"|awk '{print $1}'|grep \"/dev/\"`;echo \"$list\""
+#endif //_LINUX
+#ifdef _MACOS
+#define PROVIDER_DESCRIPTION "weLees Apple OSX PartsProvider"
+#define ENUM_METHOD (char*)"list=`ls /dev/rdisk*`;for disk1 in $list;do entry="";for disk2 in $list;do entry=$entry' '`echo $disk2|grep $disk1|sed \"s@$disk1@@\"`;done;for i in $entry;do echo $disk1$i;done;done"
+#define MOUNT_COMMAND (char*)"mount|grep '/dev/d'|awk '{print $1\" \"$3}'|sed 's@/dev/@/dev/r@'"
+
+#endif //_MACOS
 
 typedef struct _SIZE_DESC
 {
@@ -79,14 +102,14 @@ PUINT8 SearchByte(IN PUINT8 pBuffer,IN UINT uSize,IN UINT8 uData,OUT PUINT pSize
 	{
 		if(*pBuffer==uData)
 		{
-			*pSize=pBuffer-p;
+			*pSize=(UINT)(pBuffer-p);
 			return pBuffer;
 		}
 		pBuffer++;
 		uSize--;
 	}
 	
-	*pSize=pBuffer-p;
+	*pSize=(UINT)(pBuffer-p);
 	return NULL;
 }
 
@@ -171,7 +194,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 	pTask->SearchPoint=&pTask->InterBuffer[0];
 	pTask->BufferSize=0;
 	uSearchSize=pSearch->LastOffset-pSearch->StartOffset;
-	pTask->OffsetInBlock=pSearch->StartOffset%(pTask->InterBuffer.size()>>1);
+	pTask->OffsetInBlock=(UINT)(pSearch->StartOffset%(pTask->InterBuffer.size()>>1));
 	pTask->Parameter.StartOffset-=pTask->OffsetInBlock;
 	pTask->SearchPoint=&pTask->InterBuffer[0]+pTask->OffsetInBlock;
 #ifdef _WIN32
@@ -189,7 +212,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 		{
 			if(!pTask->BufferSize)
 			{//Update buffer
-#ifdef _DEBUG
+#if defined(_DEBUG)&&defined(_WIN32)
 				{
 					char sz[256];
 					sprintf(sz,"Read offset %I64XH.\n",pSearch->StartOffset);
@@ -199,7 +222,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #ifdef _WIN32
 				if(!ReadFile(pTask->Device,&pTask->InterBuffer[0]+pTask->RemainOffset,pTask->InterBuffer.size()>>1,&u,NULL))
 #else //_WIN32
-				u=i=read(pTask->Device,&pTask->InterBuffer[0]+pTask->RemainOffset,pTask->InterBuffer.size()>>1);
+				u=i=(int)read(pTask->Device,&pTask->InterBuffer[0]+pTask->RemainOffset,pTask->InterBuffer.size()>>1);
 				if(i<=0)
 #endif //_WIN32
 				{
@@ -291,7 +314,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 								}
 								
 								pItem->CaseOffsetInBlock.push_back((pTask->SearchPoint-&pTask->InterBuffer[0]-pTask->RemainOffset)%pSearch->BlockSize);
-#ifdef _DEBUG
+#if defined(_DEBUG)&&defined(_WIN32)
 								{
 									char sz[256];
 									sprintf(sz,"The matched count in block %I64XH is %d, Match offset %XH.\n",pItem->BlockOffset,pItem->CaseOffsetInBlock.size(),*(pItem->CaseOffsetInBlock.end()-1));
@@ -349,7 +372,7 @@ int APIENTRY DllMain(IN HANDLE hModule,IN DWORD uCommand,LPVOID lpReserved)
 extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 {
 	int                     i;
-	char                    szDeviceName[MAX_PATH]="\\\\.\\a:";
+	char                    szDeviceName[MAX_PATH]="\\\\.\\a:",sz[MAX_PATH];
 	ULONG                   u;
 	HANDLE                  hDevice;
 	UINT32                  uErrorCode=ERROR_SUCCESS;
@@ -371,17 +394,17 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 		case _COMMAND_SHAKE_HAND:
 			pShakeHand=(PSHAKE_HAND)pParameter;
 			pShakeHand->MajorVersion=3;
-			pShakeHand->MinorVersion=2;
-			pShakeHand->Features=_PROXY_FEATURE_WRITE|_PROXY_FEATURE_SEARCH;
-			pShakeHand->Type=_PROXY_TYPE_SOLID_DEVICE_PROVIDER;
+			pShakeHand->MinorVersion=3;
+			pShakeHand->Features=0;
+			pShakeHand->Type=_PROVIDER_TYPE_SOLID_DEVICE_PROVIDER;
 #if _MSC_VER<1300
 			strcpy(pShakeHand->Name,"Volumes");
-			strcpy(pShakeHand->Description,"weLees Windows VolumeProvider");
-			strcpy(pShakeHand->Vendor,"<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>");
+			strcpy(pShakeHand->Description,PROVIDER_DESCRIPTION);
+			strcpy(pShakeHand->Vendor,VENDOR);
 #else
 			strcpy_s(pShakeHand->Name,sizeof(pShakeHand->Name),"Volumes");
-			strcpy_s(pShakeHand->Description,sizeof(pShakeHand->Description),"weLees Windows VolumeProvider");
-			strcpy_s(pShakeHand->Vendor,sizeof(pShakeHand->Vendor),"<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>");
+			strcpy_s(pShakeHand->Description,sizeof(pShakeHand->Description),PROVIDER_DESCRIPTION);
+			strcpy_s(pShakeHand->Vendor,sizeof(pShakeHand->Vendor),PROVIDER_VENDOR);
 #endif
 			break;
 		case _COMMAND_ENUM_DEVICE:
@@ -438,49 +461,52 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 				if(DeviceIoControl(hDevice,IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
 					NULL,0,Data.Pad,sizeof(Data.Pad),&u,NULL))
 				{
-					pProfile->Bytes=0;
+					pProfile->TotalBytes=0;
 					for(i=0;i<(int)Data.Extent.NumberOfDiskExtents;i++)
 					{
-						pProfile->Bytes+=Data.Extent.Extents[i].ExtentLength.QuadPart;
+						pProfile->TotalBytes+=Data.Extent.Extents[i].ExtentLength.QuadPart;
 					}
 					CloseHandle(hDevice);
 #if _MSC_VER<1300
-					sprintf(szDeviceName,"\\\\.\\physicaldrive%d",Data.Extent.Extents[0].DiskNumber);
+					sprintf(sz,"\\\\.\\physicaldrive%d",Data.Extent.Extents[0].DiskNumber);
 #else
-					sprintf_s(szDeviceName,sizeof(szDeviceName),"\\\\.\\physicaldrive%d",Data.Extent.Extents[0].DiskNumber);
+					sprintf_s(sz,sizeof(sz),"\\\\.\\physicaldrive%d",Data.Extent.Extents[0].DiskNumber);
 #endif
-					hDevice=CreateFile(szDeviceName,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,0,NULL);
-					if(DeviceIoControl(hDevice,IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
-						NULL,0,Data.Pad,sizeof(Data.Pad),&u,NULL))
+					hDevice=CreateFile(sz,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,0,NULL);
+					if(DeviceIoControl(hDevice,IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,NULL,0,Data.Pad,sizeof(Data.Pad),&u,NULL))
 					{
-						pProfile->SectorSize = Data.Geometry.Geometry.BytesPerSector;
+						pProfile->BlockSize = Data.Geometry.Geometry.BytesPerSector;
 					}
 					else
 					{
-						pProfile->SectorSize = 512;
+						pProfile->BlockSize = 512;
 					}
 				}
 				else
 				{
+					pProfile->BlockSize = 512;
 					uErrorCode=GetLastError();
-					CloseHandle(hDevice);
-					hDevice=CreateFile(szDeviceName,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,0,NULL);
-					if(INVALID_HANDLE_VALUE!=hDevice)
-					{
-						pProfile->Features|=_PROXY_FEATURE_WRITE;
-					}
-					pProfile->Features|=_PROXY_FEATURE_SEARCH;
-					//LOG_ERR("Get profile of device %s fail, error code %XH.\r\n",m_pDeviceName,GetLastError());
 				}
 				
+				CloseHandle(hDevice);
+				hDevice=CreateFile(szDeviceName,GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,0,NULL);
+				if(INVALID_HANDLE_VALUE==hDevice)
+				{
+					pProfile->Features|=_DEVICE_FEATURE_READ_ONLY;
+				}
+				pProfile->Features|=_DEVICE_FEATURE_BLOCK_DEVICE;
+				//LOG_ERR("Get profile of device %s fail, error code %XH.\r\n",m_pDeviceName,GetLastError());
+				
 #if _MSC_VER<1300
+				sprintf(pProfile->InitializeParameters,"{Features:'%X',SectorSize:'%X',TotalSectors:'%I64X'}",pProfile->Features,pProfile->BlockSize,pProfile->TotalBytes/pProfile->BlockSize);
 				sprintf(pProfile->Description,"Volume %c<br>Device Name %s<br>Size ",pProfile->Name[5],pProfile->Name+1);
 #else
+				sprintf_s(pProfile->InitializeParameters,sizeof(pProfile->InitializeParameters),"{Features:'%X',SectorSize:'%X',TotalSectors:'%I64X'}",pProfile->Features,pProfile->BlockSize,pProfile->TotalBytes/pProfile->BlockSize);
 				sprintf_s(pProfile->Description,sizeof(pProfile->Description),"Volume %c<br>Device Name %s<br>Size ",pProfile->Name[5],pProfile->Name+1);
 #endif
-				ShowSize(pProfile->Description+strlen(pProfile->Description),sizeof(pProfile->Description)-strlen(pProfile->Description),pProfile->Bytes,pProfile->SectorSize);
+				ShowSize(pProfile->Description+strlen(pProfile->Description),sizeof(pProfile->Description)-strlen(pProfile->Description),pProfile->TotalBytes,pProfile->BlockSize);
+				CloseHandle(hDevice);
 			}
-			CloseHandle(hDevice);
 			break;
 		case _COMMAND_READ:
 			pAccess=(PACCESS_PARAM)pParameter;
@@ -508,8 +534,8 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 				{
 					uErrorCode=GetLastError();
 				}
+				CloseHandle(hDevice);
 			}
-			CloseHandle(hDevice);
 			break;
 		case _COMMAND_WRITE:
 			pAccess=(PACCESS_PARAM)pParameter;
@@ -537,8 +563,8 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 				{
 					uErrorCode=GetLastError();
 				}
+				CloseHandle(hDevice);
 			}
-			CloseHandle(hDevice);
 			break;
 		case _COMMAND_SEARCH:
 			pSearch=(PSEARCH_PARAM)pParameter;
@@ -642,11 +668,11 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 #else //_WIN32
 int PipeRun(IN char *pFormat,IN UINT uTimeout,OUT vector<char> &sRet)
 {
-	int       i,iRet,iSize,iHandle,iStatus;
-	char      szBuf[1024];
-	FILE      *file;
-	fd_set    rs;
-	timeval   tmv;
+	int     i,iRet,iSize,iHandle,iStatus;
+	char    szBuf[1024];
+	FILE    *file;
+	fd_set  rs;
+	timeval tmv;
 	// format and write the data we were given
 	
 	file=popen(pFormat,"r");
@@ -680,13 +706,13 @@ int PipeRun(IN char *pFormat,IN UINT uTimeout,OUT vector<char> &sRet)
 		{
 			break;
 		}
-		iSize=read(iHandle,&szBuf,sizeof(szBuf-1));
+		iSize=(int)read(iHandle,&szBuf,(int)sizeof(szBuf)-1);
 		if(iSize<=0)
 		{
 			break;
 		}
 		szBuf[iSize]=0;
-		iRet=sRet.size();
+		iRet=(int)sRet.size();
 		sRet.resize(iRet+iSize);
 		strncpy(&sRet[iRet-1],szBuf,iSize);
 	}
@@ -710,26 +736,45 @@ int PipeRun(IN char *pFormat,IN UINT uTimeout,OUT vector<char> &sRet)
 }
 
 
-vector<char*> g_Devices;
+typedef struct _VOLUME_DEVICE
+{
+	char *DeviceName;
+	char *MountName;
+}VOLUME_DEVICE,*PVOLUME_DEVICE;
 
+
+vector<VOLUME_DEVICE> g_Devices;
 
 UINT EnumerateDevices(void)
 {
-	int          i,j;
-	char         *p,*p2,*p3;
-	vector<char> sRet;
-	PipeRun((char*)"list=`fdisk -l|grep \"/dev\"|awk '{print $1}'|grep \"/dev/\"`;echo \"$list\"",1000,sRet);
+	int           i,j;
+	char          *p,*p2,*p3;
+	vector<char>  sRet;
+	VOLUME_DEVICE Device;
+	PipeRun(ENUM_METHOD,1000,sRet);
 	p=&sRet[0];
-	while(p2=strchr(p,'\n'))
+	for(i=0;p[i];i++)
+	{
+		if((p[i]=='\n')||(p[i]=='\r')||(p[i]=='\t'))
+		{
+			p[i]=' ';
+		}
+	}
+	while(p2=strchr(p,' '))
 	{
 		*p2=0;
 		if(p[0]!='/')
 		{
 			break;
 		}
-		p3=new char[p2-p+1];
-		strcpy(p3,p);
-		g_Devices.push_back(p3);
+		Device.MountName=NULL;
+		Device.DeviceName=new char[p2-p+1];
+		if(!Device.DeviceName)
+		{
+			return 8;
+		}
+		strcpy(Device.DeviceName,p);
+		g_Devices.push_back(Device);
 		p=p2+1;
 	}
 	
@@ -737,14 +782,56 @@ UINT EnumerateDevices(void)
 	{//sort
 		for(j=i+1;j<(int)g_Devices.size();j++)
 		{
-			if(strcmp(g_Devices[i],g_Devices[j])>0)
+			if(strcmp(g_Devices[i].DeviceName,g_Devices[j].DeviceName)>0)
 			{
-				p=g_Devices[i];
+				Device=g_Devices[i];
 				g_Devices[i]=g_Devices[j];
-				g_Devices[j]=p;
+				g_Devices[j]=Device;
 			}
 		}
 	}
+	
+	PipeRun(MOUNT_COMMAND,1000,sRet);
+	p=&sRet[0];
+	while(*p)
+	{
+		p3=strchr(p,'\n');
+		if(p3)
+		{
+			*p3=0;
+		}
+		else
+		{
+			p3=p+strlen(p);
+		}
+		p2=strchr(p,' ');
+		if(p2)
+		{
+			*p2=0;
+		}
+		else
+		{
+			return -1;
+		}
+		
+		for(j=0;j<(int)g_Devices.size();j++)
+		{
+			if(!strcmp(g_Devices[j].DeviceName,p))
+			{
+				g_Devices[j].MountName=new char[p3-p2];
+				if(!g_Devices[j].MountName)
+				{
+					return 8;
+				}
+				
+				strcpy(g_Devices[j].MountName,p2+1);
+				break;
+			}
+		}
+		p=p3+1;
+	}
+	
+	return 0;
 }
 
 
@@ -760,7 +847,9 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 	vector<char>          sRet;
 	PSEARCH_PARAM         pSearch;
 	PACCESS_PARAM         pAccess;
+#ifdef _LINUX
 	struct hd_geometry    Geometry;
+#endif //_LINUX
 	PQUERY_DEVICE_PROFILE pProfile;
 	
 	switch(uCommand)
@@ -769,11 +858,11 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			pShakeHand=(PSHAKE_HAND)pParameter;
 			pShakeHand->MajorVersion=3;
 			pShakeHand->MinorVersion=2;
-			pShakeHand->Features=_PROXY_FEATURE_WRITE|_PROXY_FEATURE_SEARCH;
-			pShakeHand->Type=_PROXY_TYPE_SOLID_DEVICE_PROVIDER;
+			pShakeHand->Features=0;//_PROXY_FEATURE_WRITE|_PROXY_FEATURE_SEARCH;
+			pShakeHand->Type=_PROVIDER_TYPE_SOLID_DEVICE_PROVIDER;
 			strcpy(pShakeHand->Name,(PCHAR)"Parts");
-			strcpy(pShakeHand->Description,(PCHAR)"weLees Linux PartsProvider");
-			strcpy(pShakeHand->Vendor,"<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>");
+			strcpy(pShakeHand->Description,PROVIDER_DESCRIPTION);
+			strcpy(pShakeHand->Vendor,PROVIDER_VENDOR);
 			break;
 		case _COMMAND_ENUM_DEVICE:
 			if(!g_Devices.size())
@@ -784,18 +873,15 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			pEnum->ReturnCount=0;
 			for(i=0;(i<pEnum->RequestCount)&&(i<(int)g_Devices.size());i++)
 			{
-				strcpy(pEnum->Result[i].Name,g_Devices[i]);
+				strcpy(pEnum->Result[i].Name,g_Devices[i].DeviceName);
 				pEnum->Result[i].Folder=0;
-				sprintf(szDeviceName,"mount|grep \"%s\"|awk '{print $3}'",g_Devices[i]);
-				PipeRun(szDeviceName,1000,sRet);
-				if(sRet[0])
+				if(g_Devices[i].MountName)
 				{
-					sRet[sRet.size()-2]=0;
-					sprintf(pEnum->Result[i].Desc,"%s(%s)",g_Devices[i],&sRet[0]);
+					sprintf(pEnum->Result[i].Desc,"%s(%s)",g_Devices[i].DeviceName,g_Devices[i].MountName);
 				}
 				else
 				{
-					strcpy(pEnum->Result[i].Desc,g_Devices[i]);
+					strcpy(pEnum->Result[i].Desc,g_Devices[i].DeviceName);
 				}
 				pEnum->Handle++;
 			}
@@ -804,48 +890,78 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 		case _COMMAND_GET_DEVICE_PROFILE:
 			pProfile=(PQUERY_DEVICE_PROFILE)pParameter;
 			strcpy(szDeviceName,pProfile->Name+1);
-			pProfile->Features=0;
-			i=open(szDeviceName,O_RDWR|O_CREAT,0777);
-			
-			if(ioctl(i,BLKSSZGET,&pProfile->SectorSize))
+			pProfile->Features=_DEVICE_FEATURE_BLOCK_DEVICE;
+			i=open(szDeviceName,O_RDWR);
+			if(i<=0)
 			{
-				if(ioctl(i,BLKPBSZGET,&pProfile->SectorSize))
+				pProfile->Features|=_DEVICE_FEATURE_READ_ONLY;
+			}
+			else
+			{
+				i=open(szDeviceName,O_RDONLY);
+			}
+			if(i<=0)
+			{
+				uErrorCode=errno;
+				strcpy(pProfile->InitializeParameters,"{}");
+				if(uErrorCode==EPERM)
 				{
-					pProfile->SectorSize=512;
+					uErrorCode=5;
+				}
+				break;
+			}
+
+#ifdef _MACOS
+			if(-1==ioctl(i,DKIOCGETBLOCKSIZE,&pProfile->BlockSize))
+			{
+				pProfile->BlockSize=512;
+			}
+			
+			if(-1==ioctl(i,DKIOCGETBLOCKCOUNT,&pProfile->TotalBytes))
+			{
+				pProfile->TotalBytes=0x10000;
+			}
+			pProfile->TotalBytes*=pProfile->BlockSize;
+#else //_MACOS
+			if(ioctl(i,BLKSSZGET,&pProfile->BlockSize))
+			{
+				if(ioctl(i,BLKPBSZGET,&pProfile->BlockSize))
+				{
+					pProfile->BlockSize=512;
 				}
 			}
 			//The BLKSSZGET is used to get sector size of logical disk
 			//Use BLKPBSZGET to get sector size of physical disk
 			
-			ioctl(i,BLKGETSIZE64,&pProfile->Bytes);
+			ioctl(i,BLKGETSIZE64,&pProfile->TotalBytes);
 			//pProfile->Bytes*=pProfile->SectorSize;
+#endif //_MACOS
 			
 			for(j=0;j<(int)g_Devices.size();j++)
 			{
-				if(!strcmp(g_Devices[j],szDeviceName))
+				if(!strcmp(g_Devices[j].DeviceName,szDeviceName))
 				{
 					break;
 				}
 			}
-			sprintf(pProfile->Description,"Disk %d<br>Device Name %s<br>",j,szDeviceName);
-			sprintf(szDeviceName,"mount|grep \"%s\"|awk '{print $3}'",pProfile->Name+1);
-			PipeRun(szDeviceName,1000,sRet);
-			if(sRet[0])
+			sprintf(pProfile->Description,"Part %d<br>Device Name %s<br>",j,szDeviceName);
+			i=(int)strlen(pProfile->Description);
+			if(g_Devices[j].MountName)
 			{
-				sRet[sRet.size()-2]=0;
-				sprintf(pProfile->Description+strlen(pProfile->Description),"Mount to path \\'%s\\'<br>Size ",&sRet[0]);
+				sprintf(pProfile->Description+i,"Mount to path \\'%s\\'<br>Size ",g_Devices[j].MountName);
 			}
 			else
 			{
-				sprintf(pProfile->Description+strlen(pProfile->Description),"Unmounted Volume<br>Size ");
+				sprintf(pProfile->Description+i,"Unmounted Volume<br>Size ");
 			}
-			ShowSize(pProfile->Description+strlen(pProfile->Description),sizeof(pProfile->Description)-strlen(pProfile->Description),pProfile->Bytes,pProfile->SectorSize);
+			ShowSize(pProfile->Description+strlen(pProfile->Description),(int)(sizeof(pProfile->Description)-strlen(pProfile->Description)),pProfile->TotalBytes,pProfile->BlockSize);
+			sprintf(pProfile->InitializeParameters,"{Features:'%X',SectorSize:'%X',TotalSectors:'%llX'}",pProfile->Features,pProfile->BlockSize,pProfile->TotalBytes/pProfile->BlockSize);
 			close(i);
 			break;
 		case _COMMAND_READ:
 			pAccess=(PACCESS_PARAM)pParameter;
 			strcpy(szDeviceName,pAccess->Name+1);
-			i=open(szDeviceName,O_RDWR,0777);
+			i=open(szDeviceName,O_RDONLY);
 			if(i<=0)
 			{
 				uErrorCode=errno;
@@ -853,18 +969,18 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			else
 			{
 				lseek64(i,pAccess->ByteOffset,SEEK_SET);
-				j=read(i,pAccess->Buffer,pAccess->Size);
+				j=(int)read(i,pAccess->Buffer,pAccess->Size);
 				if(j<=0)
 				{
 					uErrorCode=errno;
 				}
+				close(i);
 			}
-			close(i);
 			break;
 		case _COMMAND_WRITE:
 			pAccess=(PACCESS_PARAM)pParameter;
 			strcpy(szDeviceName,pAccess->Name+1);
-			i=open(szDeviceName,O_RDWR,0777);
+			i=open(szDeviceName,O_RDWR);
 			if(i<=0)
 			{
 				uErrorCode=errno;
@@ -872,13 +988,13 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			else
 			{
 				lseek64(i,pAccess->ByteOffset,SEEK_SET);
-				j=write(i,pAccess->Buffer,pAccess->Size);
+				j=(int)write(i,pAccess->Buffer,pAccess->Size);
 				if(j<=0)
 				{
 					uErrorCode=errno;
 				}
+				close(i);
 			}
-			close(i);
 			break;
 		case _COMMAND_STOP_SERVER:
 			uErrorCode=0;
@@ -904,7 +1020,11 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 				else
 				{
 					pSearch->Result->TaskID=pSearch->TaskID=g_iSearchID++;
+#ifdef _LINUX
 					pthread_spin_init(&pSearch->Result->Lock,PTHREAD_PROCESS_PRIVATE);
+#else //_LINUX
+					pthread_mutex_init(&pSearch->Result->Lock,NULL);
+#endif //_LINUX
 					pSearch->Result->Status=0;
 					pSearch->Result->ErrorCode=0;
 					pSearch->Result->CurrentOffset=pSearch->StartOffset;
@@ -976,6 +1096,14 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			break;
 	}
 	
+	if(uErrorCode==EACCES)
+	{
+		uErrorCode=5;
+	}
+	else if(uErrorCode==EBUSY)
+	{
+		uErrorCode=142;//ERROR_BUSY_DRIVE
+	}
 	return uErrorCode;
 }
 #endif //_WIN32
