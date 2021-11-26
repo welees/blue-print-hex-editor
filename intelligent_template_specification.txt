@@ -1,0 +1,235 @@
+BLUE PRINT INTELLIGENT TEMPLATE SPECIFICATION
+
+
+1. VERSION
+  Version 1.0, 2021-11-18, WeLees Co.,Ltd.
+
+
+2. LICENSE
+
+COPYRIGHT 2021 WELEES. ALL RIGHTS RESERVED.
+REDISTRIBUTION AND USE IN SOURCE AND BINARY FORMS, WITH OR WITHOUT MODIFICATION, ARE PERMITTED PROVIDED THAT THE FOLLOWING CONDITIONS ARE MET:
+REDISTRIBUTIONS OF SOURCE CODE MUST RETAIN THE ABOVE COPYRIGHT NOTICE, THIS LIST OF CONDITIONS AND THE FOLLOWING DISCLAIMER.
+REDISTRIBUTIONS OF SOURCE CODE AND BINARY FORMS FOR COMMERCIAL PURPOSES IS FORBIDDEN.
+REDISTRIBUTIONS IN BINARY FORM MUST REPRODUCE THE ABOVE COPYRIGHT NOTICE, THIS LIST OF CONDITIONS AND THE FOLLOWING DISCLAIMER IN THE DOCUMENTATION AND/OR OTHER MATERIALS PROVIDED WITH THE DISTRIBUTION.
+NEITHER THE NAME OF THE WELEES NOR THE NAMES OF ITS CONTRIBUTORS MAY BE USED TO ENDORSE OR PROMOTE PRODUCTS DERIVED FROM THIS SOFTWARE WITHOUT SPECIFIC PRIOR WRITTEN PERMISSION.
+
+
+3. OVERVIEW
+
+Blue Print is an intelligent cross-platform remote hexadecimal editor/analyzer developed by weLees. The data provider of the Blue Print uses an open protocol. If the built-in intelligent template of the Blue Print cannot meet users' requirements, users can write their own intelligent templates by JavaScript based on this specification.
+
+
+4. TERM
+
+  4.1. Intelligent Templates
+
+    Blue Print uses unique intelligent template technology to implement bind structure & binary data by intelligent analysis. Compared with similar products, Blue Print intelligent template has the following advantages
+
+    1. Instead of learning a niche scripting language, Blue Print Intelligent Template is a JavaScript script. Users can develop their own templates with minimal knowledge of web programming.
+
+    2. Intelligent Template displays data by type. Such as GUID, string, or DOS time, Blue Print provide abundant default types as well as support for user-defined types.
+
+    3. The data can be displayed in a logical manner to facilitate user understanding, for example, the number of disk sectors can be converted to capacity.
+
+    4. Intelligent Template supports dynamic type structure, automatically parse the appropriate members according to structure logic. For example, Data Run of NTFS filesystem, whose three Data are interdependent, the Blue Print can be calculated automatically, locate the correct content and display the values of each member, without manual calculation by users.
+
+    5. Intelligent Template supports association structure reference. The templates of other hexadecimal editor software are static templates that are not associated with each other and cannot be referenced from one structure to another. To handling associated data, users need to calculate the location and jump to the target location and then perform static parsing manually. Very troublesome. The Blue Print Intelligent Template automatically calculates the location of the target data and allows users to click the jump button to parse the new data directly and easily. All operations are hidden and the user only needs to care about the content itself.
+
+
+5. PUBLIC FUNCTION
+
+  gStructureParser.Register(parser)
+
+    Register the format parser
+      Input : parser structure definition
+      Return : None
+
+  MegaHexCompU(a,b)
+
+    Hexadecimal large value comparison
+      Input :
+        a : String of unsigned hexadecimal value
+        b : String of unsigned hexadecimal value
+      Return : 1 indicates a>b, 0 indicates a==b, and -1 indicates a<b
+
+  MegaHexAddU
+    Unsigned hexadecimal large value addition
+      Input :
+        a : String of unsigned hexadecimal value
+        b : String of unsigned hexadecimal value
+        length : Indicates the length of the return string. If the actual number of characters is less than the length, "0" is used to complete the string. If this parameter is not specified, just return value
+      Return : Hexadecimal string of the result of addition of a and b
+
+  MegaHexSubU
+    Unsigned hexadecimal large value subtraction
+      Input :
+        a : String of unsigned hexadecimal value
+        b : String of unsigned hexadecimal value
+        length : Indicates the length of the return string. If the actual number of characters is less than the length, "0" is used to complete the string. If this parameter is not specified, just return value
+      Return : Hexadecimal string of the result of subtracting a and b
+
+  MegaHexMulU
+    Unsigned hexadecimal large number multiplication
+      Input :
+        a : String of unsigned hexadecimal value
+        b : String of unsigned hexadecimal value
+        length : Indicates the length of the return string. If the actual number of characters is less than the length, "0" is used to complete the string. If this parameter is not specified, just return value
+      Return : Hexadecimal string of the result of multiplied by a and b
+
+  MegaHexDivU
+    Unsigned hexadecimal large number division
+      Input :
+        a : String of unsigned hexadecimal value
+        b : String of unsigned hexadecimal value
+        length : Indicates the length of the return string. If the actual number of characters is less than the length, "0" is used to complete the string. If this parameter is not specified, just return value
+      Return: an array of hexadecimal and remainder strings of the result of divided by a and b
+
+  MegaHexModU
+    Unsigned hexadecimal large number modulus
+      Input :
+        a : String of unsigned hexadecimal value
+        b : String of unsigned hexadecimal value
+        length : Indicates the length of the return string. If the actual number of characters is less than the length, "0" is used to complete the string. If this parameter is not specified, just return value
+      Return : Hexadecimal string of the result of  modulo a and B
+
+  MegaHexShlU
+    Unsigned hexadecimal large numbers move left
+      Input :
+        a : String of unsigned hexadecimal value
+        b : The number of digits to move to the left
+        length : Indicates the length of the return string. If the actual number of characters is less than the length, "0" is used to complete the string. If this parameter is not specified, just return value
+      Return : Hexadecimal string of the result of the value is shifted to the left by b bits
+
+  MegaHexShrU
+    Unsigned hexadecimal large numbers shift right
+      Input :
+        a : String of unsigned hexadecimal value
+        b : The number of digits to move right
+        length : Indicates the length of the return string. If the actual number of characters is less than the length, "0" is used to complete the string. If this parameter is not specified, just return value
+      Return : Hexadecimal string of the result of the value has been shifted to the right by b bits
+
+
+6. Built-in types
+  uhex
+    Unsigned hexadecimal number
+
+  Hex
+    Signed hexadecimal number
+
+  bytearray
+    Byte stream
+
+  wordarray
+    Words flow
+
+  char
+    ANSI string
+
+  unicode16
+    Unicode 16 encoding character string
+
+  guid
+    GUID
+
+  lvmuuid
+    The LVM UUID
+
+  dostime
+    Time in FAT format
+
+  dosdate
+    Date in FAT format
+
+  ntfsdatarun
+    Data Run dynamic format of NTFS file system
+
+
+7. Structure parser format
+  var structure={
+    Vendor : "",   Vendor info
+
+    Ver : "",      Version information
+
+    Comment : "",  Parser description
+
+    Author : "",   Parser Author name
+
+    Group : "",   The parser's Group, such as the FileSystem/File/Disk/PartTable
+
+    Type : "",    Structure name
+
+    Name : "",    The structure name for display
+
+    Size : ["",],  Structure Size, this member is an array of two items, the first one is the name of the parameter referenced in the previous structure or the default parameter of the object, the second one is the default or minimum Size. If the first entry is not an empty string, the Blue Print looks for the value of the member with the same name in the parameter as the size of the structure (for dynamic structure), otherwise the value of the second one will be used.
+
+    Parameters : {}, A JSON string that specifies the default parameters for parser. The Blue Print would use them to parse, if some parameters were not defined in the previous structure or object default parameter.
+    Note : If one parameter is a numeric value, it needs to be defined as a hexadecimal string
+    
+    Members :     Describes structure Members
+    [
+      {
+        Name : "",         Member name, parser will use This.Val.{Name} to get its data
+        
+        Desc : "",         Display name
+        
+        Type : ["","",],   The type definition of a member. It is an array of three entries. The first one is the type(See Chapter 6) of current member. The second one is the name of parameter which defined in prevoius parser of default parameters of object which described size of current member. The third one is the default size of current member.
+                           Blue Print use the first one to determine how to display the data of the members, and use entry 2/3 to determine size of member.
+                           If entry 2 is not an empty string and the parameter with the same name was defined in parameters of previous parser or object default parameters, Blue Print use it as member size, otherwise the value of entry 3 is used.
+        
+        Repeat :,          number of times this member is repeated in the structure (for arrays)
+        
+        Value : function(Parameters,This,Base)
+          (Optional)
+          Member display function, for data validation and complicated showing logic. Such as converting the sectors count to capacity, or displaying combinations of bits in an understandable sense.
+          Input :
+            Parameters : Parameters passed to the parser, either from the default Parameters of the object or as defined by the previous parser
+              This : The data corresponding to the members, and parameters defined in the structure for use by subsequent structures.
+                     This.Val.{} defines data for all members that can be read by the parser for intelligent processing.
+                     The parameters that need to be passed to subsequent structures should be placed in This.parameters.{}
+              Base : The absolute byte offset of member in the object
+            Return : an array with two entries, the first on is the string to display, the second one indicating validation passed, 0 indicating no validation, 1 indicating validation succeed, and -1 indicating validation failed
+        {
+        }
+        Ref:function(Parameters,This,Base)
+          (Optional)
+          Associated structures information generating function. When user click refer button, Blue Print can jump to other structures by returned information
+          The parameters are the same with parameters of function Value()
+          Return : A structure to describe target structure parsing information
+        {
+          The structure detail :
+          {
+            Ref :
+            {
+              Group : "",      Group name of target structure
+              Type : [""]      Type name of target structure, it is an array for multiple type, if there are multiple candidates
+            },
+            StartOffset : "",  The byte offset of target structure, it must be a string of unsigned hexadecimal value
+            Size : ""          The byte size of target structure, it must be a string of unsigned hexadecimal value
+          };
+        }
+      },
+    ],
+    Next:function(Parameters,This,Base)
+      (Optional)
+      Structure adjacent to the current structure, used to organize structure members in union. The parser uses the data of the current structure to select the appropriate additional structure to compose the correctly complete structure.
+      The parameters are the same with parameters of function Value() of member
+      Return : The return is an array describing what structure(s) following
+    {
+      Following structure entry is defined as follows:
+      {
+        Name : "",        The name of the structure
+        Desc : "",        The display name of structure
+        Type : ["","",],  The type definition of a member. It is an array of three entries. The first one is the type(See Chapter 6) of current member. The second one is the name of parameter which defined in prevoius parser of default parameters of object which described size of current member. The third one is the default size of current member.
+                          Blue Print use the first one to determine how to display the data of the members, and use entry 2/3 to determine size of member.
+                          If entry 2 is not an empty string and the parameter with the same name was defined in parameters of previous parser or object default parameters, Blue Print use it as member size, otherwise the value of entry 3 is used.
+      }
+    },
+  },
+  Neighbor:function(Parameters,This,Base)
+    (Optional) Describes what structure should be used to parse data adjacent to the current structure. The adjacent structure will not be parsed automatically, except user user click next structure button
+    The parameters are the same with parameters of function Value() of member
+    Return : The return is an array with 2 entries, the first entry is the group name of the neighbor structure and the second one is the type name of the neighbor structure
+  {
+  }
+};
