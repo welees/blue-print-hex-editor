@@ -776,9 +776,9 @@ void FillEnum(IN OUT PENUM_DEVICE pEnum,IN PWIN32_FIND_DATA pInfo)
 		strncpy(pEnum->Result[pEnum->ReturnCount].Desc,(PCHAR)p,i);
 		pEnum->Result[pEnum->ReturnCount].Desc[i]=0;
 #else
-		strncpy_s(pEnum->Result[pEnum->ReturnCount].Name,sizeof(pEnum->Result->Name),pInfo->cFileName,i);
+		strncpy_s(pEnum->Result[pEnum->ReturnCount].Name,sizeof(pEnum->Result->Name),(PCHAR)p,i);
 		pEnum->Result[pEnum->ReturnCount].Name[i]=0;
-		strncpy_s(pEnum->Result[pEnum->ReturnCount].Desc,sizeof(pEnum->Result->Desc),pInfo->cFileName,i);
+		strncpy_s(pEnum->Result[pEnum->ReturnCount].Desc,sizeof(pEnum->Result->Desc),(PCHAR)p,i);
 		pEnum->Result[pEnum->ReturnCount].Desc[i]=0;
 #endif
 		delete p;
