@@ -594,7 +594,7 @@ function RegisterStructures()
 				Type:['uhex',"",8],
 				Value:function(Parameters,This,Base)
 				{
-					var Result=["@"+getSize(MegaHexMulU(This.Val.startsector,Parameters.SectorSize))+"("+This.Val.startsector+"H)",0];
+					var Result=["@"+getSize(parseInt(MegaHexMulU(This.Val.startsector,Parameters.SectorSize),16))+"("+This.Val.startsector+"H)",0];
 					if((MegaHexCompU(Parameters.FirstSector,This.Val.startsector)<=0)&&
 					   (MegaHexCompU(Parameters.LastSector,This.Val.lastsector)>=0))
 					{
