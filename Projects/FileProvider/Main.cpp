@@ -788,29 +788,25 @@ void FillEnum(IN OUT PENUM_DEVICE pEnum,IN PWIN32_FIND_DATA pInfo)
 #else
 void FillEnum(IN OUT PENUM_DEVICE pEnum,IN struct dirent *pInfo)
 {
-	int         i;
-	PUINT8      p;
+	PCHAR       p;
 	struct stat statbuf;
+	
 	if(strcmp(pInfo->d_name,".")&&strcmp(pInfo->d_name,".."))
 	{
-		p=new UINT8[(strlen(pInfo->d_name)+1+strlen(pEnum->Path))<<4];
-		i=ANSIToUTF8(pEnum->Path,(int)strlen(pEnum->Path),p,(int)((strlen(pInfo->d_name)+1+strlen(pEnum->Path))<<4));
-		ANSIToUTF8(pInfo->d_name,(int)strlen(pInfo->d_name),p+strlen((char*)p),(int)(((strlen(pInfo->d_name)+1)<<4)-strlen((char*)p)));
+		p=new char[(strlen(pInfo->d_name)+1+strlen(pEnum->Path))];
+		strcpy(p,pEnum->Path);
+		strcat(p,pInfo->d_name);
 		if(lstat((char*)p,&statbuf)<0)
 		{
 			printf("Get File %s information fail with error code %XH.\n",p,errno);
 		}
-		
-		i=(int)ANSIToUTF8(pInfo->d_name,(int)strlen(pInfo->d_name),p,(int)(strlen(pInfo->d_name)+1)<<4);
-		
 		pEnum->Result[pEnum->ReturnCount].Folder=S_ISDIR(statbuf.st_mode);
-		strncpy(pEnum->Result[pEnum->ReturnCount].Name,(PCHAR)p,i);
-		pEnum->Result[pEnum->ReturnCount].Name[i]=0;
-		strncpy(pEnum->Result[pEnum->ReturnCount].Desc,(PCHAR)p,i);
-		pEnum->Result[pEnum->ReturnCount].Desc[i]=0;
+		strcpy(pEnum->Result[pEnum->ReturnCount].Name,(PCHAR)pInfo->d_name);
+		strcpy(pEnum->Result[pEnum->ReturnCount].Desc,(PCHAR)pInfo->d_name);
 		delete p;
 		pEnum->ReturnCount++;
 	}
+
 }
 #endif
 
