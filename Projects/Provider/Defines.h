@@ -151,7 +151,7 @@ typedef struct _SEARCH_RESULT
 
 typedef struct _SEARCH_PARAM
 {
-	vector<char>   DeviceName;                //IN    The full path file name of object/file
+	PCHAR          DeviceName;                //IN    The full path file name of object/file
 	UINT16         Features;                  //IN    Searching request
 #define _SEARCH_FEATURE_IGNORE_CASE        1  //The data need to be search is string and ignore the case
 #define _SEARCH_FEATURE_SPECIFIED_POSITION 2  //To search specified position in block, such as search string at header of block(user specified)
@@ -163,17 +163,15 @@ typedef struct _SEARCH_PARAM
 	UINT32         OffsetInBlock;             //IN    Search from specified offset in block(search part of block)
 	UINT16         DataSize;                  //IN    size of data for searching
 	UINT16         TaskID;                    //IN    The searching task ID, front-end should use it to query result, 0 means new task
-	vector<UINT8>  Data;                      //IN    data for searching
+	PUINT8         Data;                      //IN    data for searching
 	PSEARCH_RESULT Result;
 }SEARCH_PARAM,*PSEARCH_PARAM;
 
 
 typedef struct _SEARCH_TASK
 {
-	SEARCH_PARAM  Parameter;
+	PSEARCH_PARAM Parameter;
 	vector<UINT8> InterBuffer;
-	UINT          OffsetInBlock;
-	UINT          RemainOffset,BufferSize;
 	PUINT8        SearchPoint;
 #ifdef _WIN32
 	HANDLE        Device;
