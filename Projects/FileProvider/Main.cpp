@@ -1,7 +1,10 @@
 #ifdef _WIN32
 #include <Windows.h>
 #include <WinIoCtl.h>
-#define PROVIDER_DESCRIPTION (PCHAR)"weLees Windows FileProvider"
+#include <crtdbg.h>
+#define PROVIDER_TITLE (PCHAR)"weLees Windows FileProvider"
+#define LOCK(x) while(InterlockedExchange(&(x),1));
+#define UNLOCK(x) InterlockedExchange(&(x),0);
 #else //_WIN32
 #include <iconv.h>
 typedef int BOOL;
@@ -19,17 +22,21 @@ typedef void *PVOID;
 
 #ifndef _MACOS
 #define COPY_FLAG "-rf"
-#define PROVIDER_DESCRIPTION (PCHAR)"weLees Linux FileProvider"
+#define PROVIDER_TITLE (PCHAR)"weLees Linux FileProvider"
+#define LOCK(x) pthread_spin_lock(&(x));
+#define UNLOCK(x) pthread_spin_unlock(&(x))
+
 #include <linux/fs.h>
 #else //_MACOS
 #define COPY_FLAG "-R"
 #define OutputDebugString printf
 #define lseek64 lseek
-#define PROVIDER_DESCRIPTION (PCHAR)"weLees Apple OSX FileProvider"
-#define pthread_spin_lock pthread_mutex_lock
-#define pthread_spin_unlock pthread_mutex_unlock
+#define PROVIDER_TITLE (PCHAR)"weLees Apple OSX FileProvider"
+#define LOCK(x) pthread_mutex_lock(&(x))
+#define UNLOCK(x) pthread_mutex_unlock(&(x))
 #endif //_MACOS
 
+#include <stdlib.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <errno.h>
@@ -52,9 +59,14 @@ using namespace std;
 #include "../Provider/Defines.h"
 
 
-#define BUFFER_SIZE 524288
+#define ALLOC malloc
+#define FREE free
+
+#define BUFFER_SIZE 1048576
 
 #define PROVIDER_VENDOR "<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>"
+#define PROVIDER_DESCRIPTION PROVIDER_TITLE " Version 4.3"
+
 
 typedef struct _SIZE_DESC
 {
@@ -109,22 +121,22 @@ void ShowSize(OUT PCHAR pBuffer,IN int iBufferSize,IN UINT64 uBytes)
 }
 
 
-PUINT8 SearchByte(IN PUINT8 pBuffer,IN UINT uSize,IN UINT8 uData,OUT PUINT pSize)
+PUINT8 SearchHeader(IN PUINT8 pBuffer,IN UINT uSize,IN UINT8 uData,OUT PUINT pOffset)
 {
 	PUINT8 p=pBuffer;
 	
 	while(uSize)
 	{
-		if(*pBuffer==uData)
+		if(*p==uData)
 		{
-			*pSize=(UINT)(pBuffer-p);
-			return pBuffer;
+			*pOffset=(UINT)(p-pBuffer);
+			return p;
 		}
-		pBuffer++;
+		p++;
 		uSize--;
 	}
 	
-	*pSize=(UINT)(pBuffer-p);
+	*pOffset=(UINT)(p-pBuffer);
 	return NULL;
 }
 
@@ -134,11 +146,7 @@ vector<PSEARCH_TASK> g_SearchTask;
 #define _MAX_MATCH_COUNT 100
 
 
-#ifdef _WIN32
-ULONG APIENTRY SearchRoutine(IN PSEARCH_TASK pTask)
-#else //_WIN32
 PVOID APIENTRY SearchRoutine(IN PVOID p)
-#endif //_WIN32
 {
 	int           i;
 	UINT          uSize,uBufferSize=0,uReadOffset,uOffsetInBlock;
@@ -146,13 +154,14 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 	DWORD         u;
 #else //_WIN32
 	UINT          u;
-	PSEARCH_TASK  pTask=(PSEARCH_TASK)p;
 #endif //_WIN32
 	UINT64        uSearchSize;
-	SEARCH_ITEM   siItem,*pItem;
+	PSEARCH_TASK  pTask=(PSEARCH_TASK)p;
+	PSEARCH_BLOCK pBlock,pPrev;
 	PSEARCH_PARAM pSearch=pTask->Parameter;
 	
 	uReadOffset=pSearch->DataSize<<1;
+	pSearch->Result->CurrentOffset=pSearch->StartOffset;
 	pTask->Parameter->Result->ErrorCode=0;
 /*
 	if(pTask->Parameter->Features&_SEARCH_FEATURE_IGNORE_CASE)
@@ -191,7 +200,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 		//pSearch->Status=_SEARCH_STATUS_STOP;
 		pSearch->Result->ErrorCode=GetLastError();
 		pSearch->Result->Status=_SEARCH_STATUS_STOPPED;
-		return pSearch->Result->ErrorCode;
+		return (PVOID)pSearch->Result->ErrorCode;
 	}
 #else //_WIN32
 	pTask->Device=open(pSearch->DeviceName+1,O_RDWR);
@@ -204,12 +213,9 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #endif //_WIN32
 	
 	pTask->Parameter->Result->MatchedCount=0;
-	pTask->InterBuffer.resize(BUFFER_SIZE+uReadOffset);
-	//pTask->RemainOffset=0;
-	//pTask->PageOffset=0;
-	uBufferSize=0;
+	pTask->InterBuffer=(PUINT8)ALLOC(BUFFER_SIZE+(pSearch->DataSize<<1));//Add padding for search phase across 2 blocks
 	uSearchSize=pSearch->LastOffset-pSearch->StartOffset;
-	uOffsetInBlock=(UINT)(pSearch->StartOffset%(pTask->InterBuffer.size()>>1));
+	uOffsetInBlock=(UINT)(pSearch->StartOffset%BUFFER_SIZE);
 	pTask->Parameter->StartOffset-=uOffsetInBlock;//Align with read block
 #ifdef _WIN32
 	SetFilePointerEx(pTask->Device,*((PLARGE_INTEGER)&pSearch->StartOffset),NULL,FILE_BEGIN);
@@ -222,9 +228,9 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 	}
 	else
 	{//Normal searching
-		while((uSearchSize>pSearch->DataSize)&&(!(pSearch->Result->Status&_SEARCH_STATUS_STOPPING)))
+		while((uSearchSize>=pSearch->DataSize)&&(!(pSearch->Result->Status&_SEARCH_STATUS_STOPPING)))
 		{
-			pTask->SearchPoint=&pTask->InterBuffer[uReadOffset+uOffsetInBlock-uBufferSize];
+			pTask->SearchPoint=pTask->InterBuffer+uOffsetInBlock;
 #if defined(_DEBUG)&&defined(_WIN32)
 			{
 				char sz[256];
@@ -233,9 +239,9 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 			}
 #endif //_DEBUG
 #ifdef _WIN32
-			if(!ReadFile(pTask->Device,&pTask->InterBuffer[uReadOffset],BUFFER_SIZE,&u,NULL))
+			if(!ReadFile(pTask->Device,pTask->InterBuffer+uBufferSize,BUFFER_SIZE,&u,NULL))
 #else //_WIN32
-			u=i=(int)read(pTask->Device,&pTask->InterBuffer[uReadOffset],BUFFER_SIZE);
+			u=i=(int)read(pTask->Device,pTask->InterBuffer+uBufferSize,BUFFER_SIZE);
 			if(i<=0)
 #endif //_WIN32
 			{
@@ -246,16 +252,16 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 			}
 			
 			if(!u)
-			{//No data readed
+			{//No data read
 				break;
 			}
 			uBufferSize+=u-uOffsetInBlock;
-			if(uSearchSize<=uBufferSize)
-			{
+			if(uSearchSize<uBufferSize)
+			{//Tail of search range
 				uBufferSize=(UINT)uSearchSize;
 			}
 			
-			while((uSearchSize>pSearch->DataSize)&&(!(pSearch->Result->Status&_SEARCH_STATUS_STOPPING)))
+			while((uSearchSize>=pSearch->DataSize)&&(!(pSearch->Result->Status&_SEARCH_STATUS_STOPPING)))
 			{//Search in current buffer
 				if(pSearch->Result->MatchedCount>=_MAX_MATCH_COUNT)
 				{//Hold for UI
@@ -271,73 +277,70 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 				}
 				else
 				{
-					pTask->SearchPoint=SearchByte(pTask->SearchPoint,uBufferSize,pSearch->Data[0],&uSize);
+					pTask->SearchPoint=SearchHeader(pTask->SearchPoint,uBufferSize,pSearch->Data[0],&uSize);
 					if(pTask->SearchPoint)
 					{//Header byte matched
 						uBufferSize-=uSize;
 						uSearchSize-=uSize;
+						pSearch->Result->CurrentOffset+=uSize;
 						if(uBufferSize<pSearch->DataSize)
 						{//the remain data is less than search data, combine it with next blocks
-							memcpy(&pTask->InterBuffer[uReadOffset-uBufferSize],pTask->SearchPoint,uBufferSize);
+							memcpy(pTask->InterBuffer,pTask->SearchPoint,uBufferSize);
 							uOffsetInBlock=0;
 							break;
 						}
 						else
 						{//Remain data can hold search data
-							if(!memcmp(pTask->SearchPoint,&pSearch->Data[0],pSearch->DataSize))
+							if(!memcmp(pTask->SearchPoint,pSearch->Data,pSearch->DataSize))
 							{//Found!
-								//pSearch->CurrentOffset=pSearch->StartOffset+(pPos-uBuffer);
-#ifdef _WIN32
-								while(InterlockedExchange(&pTask->Parameter->Result->Lock,1));
-#else //_WIN32
-								pthread_spin_lock(&pTask->Parameter->Result->Lock);
-#endif //_WIN32
+								LOCK(pTask->Parameter->Result->Lock);//Insert result
 								pTask->Parameter->Result->MatchedCount++;
-								
-								if(pTask->Parameter->Result->MatchItems.size())
-								{
-									pItem=&pTask->Parameter->Result->MatchItems[0];
-								}
-								for(i=0;i<(int)pTask->Parameter->Result->MatchItems.size();i++)
-								{
-									if(pItem->BlockOffset==pSearch->StartOffset+ALIGN2DOWN(pTask->SearchPoint-&pTask->InterBuffer[uReadOffset],pSearch->BlockSize))
+
+								pBlock=pPrev=pTask->Parameter->Result->MatchItems;
+								for(;pBlock;pPrev=pBlock,pBlock=pBlock->Next)
+								{//Find matched block
+									if((pBlock->BlockOffset==(pSearch->Result->CurrentOffset/pSearch->BlockSize)*pSearch->BlockSize)&&(pBlock->MatchedCount<sizeof(pBlock->CaseOffsetInBlock)/sizeof(pBlock->CaseOffsetInBlock[0])))
 									{
 										break;
 									}
-									pItem++;
 								}
-								if(i>=(int)pTask->Parameter->Result->MatchItems.size())
+								if(!pBlock)
 								{//New block
-									siItem.BlockOffset=pSearch->StartOffset+ALIGN2DOWN(pTask->SearchPoint-&pTask->InterBuffer[uReadOffset],pSearch->BlockSize);
-									siItem.BlockData=new UINT8[pSearch->BlockSize];
-									if(siItem.BlockData)
-									{//Copy buffer as cache
-										memcpy(siItem.BlockData,pTask->SearchPoint-((pTask->SearchPoint-&pTask->InterBuffer[uReadOffset])%pSearch->BlockSize),pSearch->BlockSize);
-										pTask->Parameter->Result->MatchItems.push_back(siItem);
-										pItem=&pTask->Parameter->Result->MatchItems[pTask->Parameter->Result->MatchItems.size()-1];
+									pBlock=(PSEARCH_BLOCK)ALLOC(sizeof(SEARCH_BLOCK));
+									if(!pBlock)
+									{
+										return (PVOID)8; //ERROR_NOT_ENOUGH_MEMORY;
+									}
+									pBlock->BlockOffset=(pSearch->Result->CurrentOffset/pSearch->BlockSize)*pSearch->BlockSize;
+									pBlock->MatchedCount=0;
+									if(pPrev)
+									{
+										pPrev->Next=pBlock;
+										pBlock->Prev=pPrev;
 									}
 									else
 									{
-										pTask->Parameter->Result->ErrorCode=8;//ERROR_NOT_ENOUGH_MEMORY;
-										break;
+										pTask->Parameter->Result->MatchItems=pBlock;
+										pBlock->Prev=NULL;
 									}
+									pBlock->Next=NULL;
 								}
 								
-								pItem->CaseOffsetInBlock.push_back((pTask->SearchPoint-&pTask->InterBuffer[uReadOffset])%pSearch->BlockSize);
+								//printf("Block Offset %I64XH, Start Offset %I64XH, Read Offset %XH\n",pBlock->BlockOffset,pSearch->StartOffset,uReadOffset);
+								pBlock->CaseOffsetInBlock[pBlock->MatchedCount++]=(UINT32)(pSearch->Result->CurrentOffset%pSearch->BlockSize);
 #if defined(_DEBUG)&&defined(_WIN32)
 								{
 									char sz[256];
-									sprintf(sz,"The matched count in block %I64XH is %d, Match offset %XH.\n",pItem->BlockOffset,pItem->CaseOffsetInBlock.size(),*(pItem->CaseOffsetInBlock.end()-1));
+									sprintf(sz,"The matched count in block %I64XH is %d, Match offset %XH.\n",pBlock->BlockOffset,pBlock->MatchedCount,pBlock->CaseOffsetInBlock[pBlock->MatchedCount-1]);
 									OutputDebugString(sz);
+									printf("The matched count in block %I64XH is %d, Match offset %XH.\n",pBlock->BlockOffset,pBlock->MatchedCount,pBlock->CaseOffsetInBlock[pBlock->MatchedCount-1]);
 								}
 #endif //_DEBUG
-								
-#ifdef _WIN32
-								InterlockedExchange(&pTask->Parameter->Result->Lock,0);
-#else //_WIN32
-								pthread_spin_unlock(&pTask->Parameter->Result->Lock);
-#endif //_WIN32
+
+								UNLOCK(pTask->Parameter->Result->Lock);
+
 								pTask->SearchPoint+=pSearch->DataSize;
+								pSearch->Result->CurrentOffset+=pSearch->DataSize;
 								uBufferSize-=pSearch->DataSize;
 								uSearchSize-=pSearch->DataSize;
 							}
@@ -346,14 +349,16 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 								pTask->SearchPoint++;
 								uBufferSize--;
 								uSearchSize--;
+								pSearch->Result->CurrentOffset++;
 							}
 						}
 					}
 					else
 					{//No match in the block
 						//pTask->RemainOffset=0;
-						uOffsetInBlock=0;
 						uSearchSize-=uBufferSize;
+						pSearch->Result->CurrentOffset+=uBufferSize;
+						uOffsetInBlock=0;
 						uBufferSize=0;
 						break;
 					}
@@ -361,7 +366,6 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 			}
 			
 			pSearch->StartOffset+=BUFFER_SIZE;
-			pSearch->Result->CurrentOffset=pSearch->StartOffset;
 		}
 	}
 	
@@ -812,6 +816,85 @@ void FillEnum(IN OUT PENUM_DEVICE pEnum,IN struct dirent *pInfo)
 
 
 #ifdef _WIN32
+BOOL EnumerateFunc(IN PENUM_DEVICE pEnum,IN LPNETRESOURCE pResource,IN OUT int &iIndex)
+{
+	DWORD         uIndex;
+	DWORD         uSize=16384;     // 16K is a good size
+	DWORD         uCount=-1;        // enumerate all possible entries
+	DWORD         dwResult,dwResultEnum;
+	HANDLE        hEnum;
+	LPNETRESOURCE pResourceLocal;    // pointer to enumerated structures
+	
+	if((dwResult=WNetOpenEnum(RESOURCE_CONNECTED,RESOURCETYPE_DISK,0,pResource,&hEnum))!=NO_ERROR)
+	{
+		printf("WnetOpenEnum failed with error %d\n", dwResult);
+		return FALSE;
+	}
+	
+	pResourceLocal=(LPNETRESOURCE)new UINT8[uSize];
+	if(!pResourceLocal)
+	{
+		printf("WnetOpenEnum failed with error %d\n", dwResult);
+		WNetCloseEnum(hEnum);
+		//      NetErrorHandler(hwnd, dwResult, (LPSTR)"WNetOpenEnum");
+		return FALSE;
+	}
+	
+	do
+	{
+		ZeroMemory(pResourceLocal,uSize);
+		if((dwResultEnum=WNetEnumResource(hEnum,&uCount,pResourceLocal,&uSize))==NO_ERROR)
+		{
+			for(uIndex=0;(uIndex<uCount)&&(pEnum->ReturnCount<pEnum->RequestCount);uIndex++)
+			{
+				if(!iIndex)
+				{
+#if _MSC_VER<1300
+					sprintf(pEnum->Result[pEnum->ReturnCount].Name,"//./%c:",pResourceLocal[uIndex].lpLocalName[0]);
+					sprintf(pEnum->Result[pEnum->ReturnCount].Desc,"%c:/(%s)",pResourceLocal[uIndex].lpLocalName[0],pResourceLocal[uIndex].lpRemoteName);
+#else
+					sprintf_s(pEnum->Result[pEnum->ReturnCount].Name,sizeof(pEnum->Result[pEnum->ReturnCount].Name),"//./%c:",pResourceLocal[uIndex].lpLocalName[0]);
+					sprintf_s(pEnum->Result[pEnum->ReturnCount].Desc,sizeof(pEnum->Result[pEnum->ReturnCount].Desc),"%c:/(%s)",pResourceLocal[uIndex].lpLocalName[0],pResourceLocal[uIndex].lpRemoteName);
+#endif
+					pEnum->Result[pEnum->ReturnCount].Folder=TRUE;
+					pEnum->Handle++;
+					pEnum->ReturnCount++;
+				}
+				else
+				{
+					iIndex--;
+				}
+				if(pResourceLocal[uIndex].dwUsage&RESOURCEUSAGE_CONTAINER)
+				{
+					if (!EnumerateFunc(pEnum,pResourceLocal+uIndex,iIndex))
+					{
+						printf("EnumerateFunc returned FALSE\n");
+					}
+				}
+			}
+		}
+		else
+		{
+			if(dwResultEnum!=ERROR_NO_MORE_ITEMS)
+			{
+				printf("WNetEnumResource failed with error %d\n", dwResultEnum);
+				break;
+			}
+		}
+	}while((uIndex<uCount)&&(pEnum->ReturnCount<pEnum->RequestCount));
+	
+	delete pResourceLocal;
+	
+	if(WNetCloseEnum(hEnum)!=NO_ERROR)
+	{
+		printf("WNetCloseEnum failed with error %d\n",dwResult);
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
+
 extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 {
 	int                       i;
@@ -823,6 +906,7 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 	PSHAKE_HAND               pShakeHand;
 	PENUM_DEVICE              pEnum;
 	PSEARCH_TASK              pTask;
+	PSEARCH_BLOCK             pBlock,pNext;
 	PSEARCH_PARAM             pSearch;
 	PACCESS_PARAM             pAccess;
 	WIN32_FIND_DATA           FindFile;
@@ -835,7 +919,7 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 		case _COMMAND_SHAKE_HAND:
 			pShakeHand=(PSHAKE_HAND)pParameter;
 			pShakeHand->MajorVersion=4;
-			pShakeHand->MinorVersion=2;
+			pShakeHand->MinorVersion=3;
 			pShakeHand->Features=0;
 			pShakeHand->Type=_PROVIDER_TYPE_SOLID_DEVICE_PROVIDER;
 #if _MSC_VER<1300
@@ -856,7 +940,7 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 			if(!p2)
 			{//Volume
 				u=GetLogicalDrives();
-				for(i=(int)pEnum->Handle;(i<27)&&(pEnum->ReturnCount<pEnum->RequestCount);i++)
+				for(i=(int)pEnum->Handle;(i<26)&&(pEnum->ReturnCount<pEnum->RequestCount);i++)
 				{
 					if(u&(1<<i))
 					{
@@ -879,6 +963,11 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 					}
 				}
 				pEnum->Handle=i;
+				if(pEnum->ReturnCount<pEnum->RequestCount)
+				{
+					i-=26;
+					EnumerateFunc(pEnum,NULL,i);
+				}
 			}
 			else
 			{
@@ -1030,16 +1119,17 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 			pSearch=(PSEARCH_PARAM)pParameter;
 			if(!pSearch->TaskID)
 			{
-				pSearch->Result=new SEARCH_RESULT;
+				pSearch->Result=(PSEARCH_RESULT)ALLOC(sizeof(SEARCH_RESULT));
 				if(!pSearch->Result)
 				{
 					uErrorCode=ERROR_NOT_ENOUGH_MEMORY;
 					break;
 				}
-				pTask=new SEARCH_TASK;
+				pSearch->Result->MatchItems=NULL;
+				pTask=(PSEARCH_TASK)ALLOC(sizeof(SEARCH_TASK));
 				if(!pTask)
 				{
-					delete pSearch->Result;
+					FREE(pSearch->Result);
 					pSearch->Result=NULL;
 					uErrorCode=ERROR_NOT_ENOUGH_MEMORY;
 					break;
@@ -1051,13 +1141,17 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 					pSearch->Result->Status=0;
 					pSearch->Result->ErrorCode=0;
 					pSearch->Result->CurrentOffset=pSearch->StartOffset;
-					pTask->Parameter=new SEARCH_PARAM;
+					pTask->Parameter=(PSEARCH_PARAM)ALLOC(sizeof(SEARCH_PARAM));
 					CopyMemory(pTask->Parameter,pSearch,sizeof(*pSearch));
 					_ASSERT(pTask->Parameter);
-					pTask->Parameter->DeviceName=new CHAR[strlen(pSearch->DeviceName)+1];
+					pTask->Parameter->DeviceName=(PCHAR)ALLOC(strlen(pSearch->DeviceName)+1);
 					_ASSERT(pTask->Parameter->DeviceName);
+#if _MSC_VER<1300
+					strcpy(pTask->Parameter->DeviceName,pSearch->DeviceName);
+#else
 					strcpy_s(pTask->Parameter->DeviceName,strlen(pSearch->DeviceName)+1,pSearch->DeviceName);
-					pTask->Parameter->Data=new UINT8[pSearch->DataSize];
+#endif
+					pTask->Parameter->Data=(PUINT8)ALLOC(pSearch->DataSize);
 					_ASSERT(pTask->Parameter->Data);
 					CopyMemory(pTask->Parameter->Data,pSearch->Data,pSearch->DataSize);
 					g_SearchTask.push_back(pTask);
@@ -1090,12 +1184,12 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 			{
 				if(g_SearchTask[i]->Parameter->TaskID==*((PUINT16)pParameter))
 				{
-					for(u=0;u<g_SearchTask[i]->Parameter->Result->MatchItems.size();u++)
+					for(pBlock=g_SearchTask[i]->Parameter->Result->MatchItems;pBlock;pBlock=pNext)
 					{
-						delete g_SearchTask[i]->Parameter->Result->MatchItems[u].BlockData;
-						g_SearchTask[i]->Parameter->Result->MatchItems[u].CaseOffsetInBlock.clear();
+						pNext=pBlock->Next;
+						FREE(pBlock);
 					}
-					g_SearchTask[i]->Parameter->Result->MatchItems.clear();
+					g_SearchTask[i]->Parameter->Result->MatchItems=NULL;
 					g_SearchTask[i]->Parameter->Result->MatchedCount=0;
 					break;
 				}
@@ -1113,11 +1207,12 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 						Sleep(100);
 					}
 					CloseHandle(g_SearchTask[i]->Device);
-					delete g_SearchTask[i]->Parameter->DeviceName;
-					delete g_SearchTask[i]->Parameter->Data;
-					delete g_SearchTask[i]->Parameter->Result;
-					delete g_SearchTask[i]->Parameter;
-					delete g_SearchTask[i];
+					FREE(g_SearchTask[i]->Parameter->DeviceName);
+					FREE(g_SearchTask[i]->Parameter->Data);
+					FREE(g_SearchTask[i]->Parameter->Result);
+					FREE(g_SearchTask[i]->Parameter);
+					FREE(g_SearchTask[i]->InterBuffer);
+					FREE(g_SearchTask[i]);
 					g_SearchTask.erase(g_SearchTask.begin()+i);
 					break;
 				}
@@ -1139,12 +1234,13 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 {
 	int                    i,j;
 	DIR                    *pDir;
-	char                   szDeviceName[1024],szCmd[1536];
+	char                   szDeviceName[1024],szCmd[4096];
 	UINT32                 uErrorCode=0;
 	pthread_t              id;
 	PSHAKE_HAND            pShakeHand;
 	PENUM_DEVICE           pEnum;
 	PSEARCH_TASK           pTask=NULL;
+	PSEARCH_BLOCK          pBlock,pNext;
 	PSEARCH_PARAM          pSearch;
 	PACCESS_PARAM          pAccess;
 	struct dirent          *pFileName;
@@ -1253,16 +1349,16 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			pSearch=(PSEARCH_PARAM)pParameter;
 			if(!pSearch->TaskID)
 			{
-				pSearch->Result=new SEARCH_RESULT;
+				pSearch->Result=(PSEARCH_RESULT)ALLOC(sizeof(SEARCH_RESULT));
 				if(!pSearch->Result)
 				{
 					uErrorCode=87;
 					break;
 				}
-				pTask=new SEARCH_TASK;
+				pTask=(PSEARCH_TASK)ALLOC(sizeof(SEARCH_TASK));
 				if(!pTask)
 				{
-					delete pSearch->Result;
+					FREE(pSearch->Result);
 					pSearch->Result=NULL;
 					uErrorCode=87;
 					break;
@@ -1278,11 +1374,11 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 					pSearch->Result->Status=0;
 					pSearch->Result->ErrorCode=0;
 					pSearch->Result->CurrentOffset=pSearch->StartOffset;
-					pTask->Parameter=new SEARCH_PARAM;
+					pTask->Parameter=(PSEARCH_PARAM)ALLOC(sizeof(SEARCH_PARAM));
 					memcpy(pTask->Parameter,pSearch,sizeof(*pSearch));
-					pTask->Parameter->DeviceName=new CHAR[strlen(pSearch->DeviceName)+1];
+					pTask->Parameter->DeviceName=(PCHAR)ALLOC(strlen(pSearch->DeviceName)+1);
 					strcpy(pTask->Parameter->DeviceName,pSearch->DeviceName);
-					pTask->Parameter->Data=new UINT8[pSearch->DataSize];
+					pTask->Parameter->Data=(PUINT8)ALLOC(pSearch->DataSize);
 					memcpy(pTask->Parameter->Data,pSearch->Data,pSearch->DataSize);
 					g_SearchTask.push_back(pTask);
 					
@@ -1314,12 +1410,12 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 			{
 				if(g_SearchTask[i]->Parameter->TaskID==*((PUINT16)pParameter))
 				{
-					for(j=0;j<g_SearchTask[i]->Parameter->Result->MatchItems.size();j++)
+					for(pBlock=g_SearchTask[i]->Parameter->Result->MatchItems;pBlock;pBlock=pNext)
 					{
-						delete g_SearchTask[i]->Parameter->Result->MatchItems[j].BlockData;
-						g_SearchTask[i]->Parameter->Result->MatchItems[j].CaseOffsetInBlock.clear();
+						pNext=pBlock->Next;
+						FREE(pBlock);
 					}
-					g_SearchTask[i]->Parameter->Result->MatchItems.clear();
+					g_SearchTask[i]->Parameter->Result->MatchItems=NULL;
 					g_SearchTask[i]->Parameter->Result->MatchedCount=0;
 					break;
 				}
@@ -1337,11 +1433,12 @@ extern "C" UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)
 						sleep(1);
 					}
 					close(g_SearchTask[i]->Device);
-					delete g_SearchTask[i]->Parameter->DeviceName;
-					delete g_SearchTask[i]->Parameter->Data;
-					delete g_SearchTask[i]->Parameter->Result;
-					delete g_SearchTask[i]->Parameter;
-					delete g_SearchTask[i];
+					FREE(g_SearchTask[i]->Parameter->DeviceName);
+					FREE(g_SearchTask[i]->Parameter->Data);
+					FREE(g_SearchTask[i]->Parameter->Result);
+					FREE(g_SearchTask[i]->Parameter);
+					FREE(g_SearchTask[i]->InterBuffer);
+					FREE(g_SearchTask[i]);
 					g_SearchTask.erase(g_SearchTask.begin()+i);
 					break;
 				}
