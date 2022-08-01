@@ -9,7 +9,7 @@ Module Name:
 Abstract:
 
     To define interfaces / structures of object provider of weLees Blue Print.
-	All provider followed this interface can work for weLees Blue Print
+    All provider followed this interface can work for weLees Blue Print
 
 Author:
 
@@ -17,7 +17,7 @@ Author:
 
 Environment:
 
-    Windows / Linux
+    Windows / Linux / OSX
 
 Notes:
 
@@ -37,8 +37,23 @@ Revision History:
 #endif //BOOLEAN
 
 
-#define _WBDP_MAJOR 2    //weLees Blue Print Data Provider Protocol 2.1
-#define _WBDP_MINOR 1
+#ifndef UINT16
+typedef unsigned short UINT16,*PUINT16;
+#endif //BOOLEAN
+
+
+#ifndef UINT8
+typedef unsigned char UINT8,*PUINT8;
+#endif //BOOLEAN
+
+
+#if defined(_WIN32) &&(!(defined(SetFilePointerEx)))
+WINBASEAPI BOOL WINAPI SetFilePointerEx(IN HANDLE hFile,IN LARGE_INTEGER liDistanceToMove,OUT PLARGE_INTEGER lpNewFilePointer,IN DWORD dwMoveMethod);
+#endif //SetFilePointerEx
+
+
+#define _WBDP_MAJOR 2    //weLees Blue Print Data Provider Protocol 2.2
+#define _WBDP_MINOR 2
 
 
 //Service function, custom provider should declare function 'UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID pParameter)' to handle request
@@ -49,7 +64,7 @@ typedef UINT32 (*ServiceRoutine)(IN UINT16 uCommand,IN PVOID pParameter);
 typedef struct _SHAKE_HAND
 {
 	UINT16 MajorVersion,MinorVersion;  //IN OUT The server uses these 2 members to specify the version of the protocol used by the server
-                                       //       The provider returns the protocol version number used by the provider
+	                                   //       The provider returns the protocol version number used by the provider
 	
 	UINT32 Features;
 // #define _PROVIDER_FEATURE_WRITE  1        //OUT  User can write data into objects
@@ -119,12 +134,14 @@ typedef struct _ACCESS_PARAM
 #define _COMMAND_SEARCH                5  //To search data
 
 
-typedef struct _SEARCH_ITEM
+typedef struct _SEARCH_BLOCK
 {
-	UINT64         BlockOffset;
-	vector<UINT32> CaseOffsetInBlock;
-	PUINT8         BlockData;
-}SEARCH_ITEM,*PSEARCH_ITEM;
+	struct _SEARCH_BLOCK *Prev,*Next;
+	UINT64               BlockOffset;
+	//PUINT8               BlockData;
+	UINT32               MatchedCount;
+	UINT32               CaseOffsetInBlock[256];
+}SEARCH_BLOCK,*PSEARCH_BLOCK;
 
 
 typedef struct _SEARCH_RESULT
@@ -136,7 +153,7 @@ typedef struct _SEARCH_RESULT
 #define _SEARCH_STATUS_STOPPED  1      //Searching task stopped
 #define _SEARCH_STATUS_STOPPING 2      //Searching task is been stopping
 	UINT8               MatchedCount;
-	vector<SEARCH_ITEM> MatchItems;
+	PSEARCH_BLOCK       MatchItems;
 #if defined(_WIN32)
 	LONG                Lock;
 #endif
@@ -171,7 +188,7 @@ typedef struct _SEARCH_PARAM
 typedef struct _SEARCH_TASK
 {
 	PSEARCH_PARAM Parameter;
-	vector<UINT8> InterBuffer;
+	PUINT8        InterBuffer;
 	PUINT8        SearchPoint;
 #ifdef _WIN32
 	HANDLE        Device;
