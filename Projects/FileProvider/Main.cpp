@@ -818,6 +818,7 @@ void FillEnum(IN OUT PENUM_DEVICE pEnum,IN struct dirent *pInfo)
 #ifdef _WIN32
 BOOL EnumerateFunc(IN PENUM_DEVICE pEnum,IN LPNETRESOURCE pResource,IN OUT int &iIndex)
 {
+	int           i;
 	DWORD         uIndex;
 	DWORD         uSize=16384;     // 16K is a good size
 	DWORD         uCount=-1;        // enumerate all possible entries
@@ -856,6 +857,13 @@ BOOL EnumerateFunc(IN PENUM_DEVICE pEnum,IN LPNETRESOURCE pResource,IN OUT int &
 					sprintf_s(pEnum->Result[pEnum->ReturnCount].Name,sizeof(pEnum->Result[pEnum->ReturnCount].Name),"//./%c:",pResourceLocal[uIndex].lpLocalName[0]);
 					sprintf_s(pEnum->Result[pEnum->ReturnCount].Desc,sizeof(pEnum->Result[pEnum->ReturnCount].Desc),"%c:/(%s)",pResourceLocal[uIndex].lpLocalName[0],pResourceLocal[uIndex].lpRemoteName);
 #endif
+					for(i=0;pEnum->Result[pEnum->ReturnCount].Desc[i];i++)
+					{
+						if(pEnum->Result[pEnum->ReturnCount].Desc[i]=='\\')
+						{
+							pEnum->Result[pEnum->ReturnCount].Desc[i]='/';
+						}
+					}
 					pEnum->Result[pEnum->ReturnCount].Folder=TRUE;
 					pEnum->Handle++;
 					pEnum->ReturnCount++;
