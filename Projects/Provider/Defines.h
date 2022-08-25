@@ -155,12 +155,18 @@ typedef struct _SEARCH_RESULT
 	UINT8               MatchedCount;
 	PSEARCH_BLOCK       MatchItems;
 #if defined(_WIN32)
+#define LOCK(x) while(InterlockedExchange(&(x),1))
+#define UNLOCK(x) InterlockedExchange(&(x),0)
 	LONG                Lock;
 #endif
 #if defined(_LINUX)
+#define LOCK(x) pthread_spin_lock(&(x));
+#define UNLOCK(x) pthread_spin_unlock(&(x))
 	pthread_spinlock_t  Lock;
 #endif
 #if defined(_MACOS)
+#define LOCK(x) pthread_mutex_lock(&(x))
+#define UNLOCK(x) pthread_mutex_unlock(&(x))
 	pthread_mutex_t     Lock;
 #endif
 }SEARCH_RESULT,*PSEARCH_RESULT;
@@ -189,6 +195,7 @@ typedef struct _SEARCH_TASK
 {
 	PSEARCH_PARAM Parameter;
 	PUINT8        InterBuffer;
+	PUINT8        AccessBuffer;
 	PUINT8        SearchPoint;
 #ifdef _WIN32
 	HANDLE        Device;
