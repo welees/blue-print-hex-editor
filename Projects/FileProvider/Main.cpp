@@ -3,8 +3,6 @@
 #include <WinIoCtl.h>
 #include <crtdbg.h>
 #define PROVIDER_TITLE (PCHAR)"weLees Windows FileProvider"
-#define LOCK(x) while(InterlockedExchange(&(x),1));
-#define UNLOCK(x) InterlockedExchange(&(x),0);
 #else //_WIN32
 #include <iconv.h>
 typedef int BOOL;
@@ -23,8 +21,6 @@ typedef void *PVOID;
 #ifndef _MACOS
 #define COPY_FLAG "-rf"
 #define PROVIDER_TITLE (PCHAR)"weLees Linux FileProvider"
-#define LOCK(x) pthread_spin_lock(&(x));
-#define UNLOCK(x) pthread_spin_unlock(&(x))
 
 #include <linux/fs.h>
 #else //_MACOS
@@ -32,8 +28,6 @@ typedef void *PVOID;
 #define OutputDebugString printf
 #define lseek64 lseek
 #define PROVIDER_TITLE (PCHAR)"weLees Apple OSX FileProvider"
-#define LOCK(x) pthread_mutex_lock(&(x))
-#define UNLOCK(x) pthread_mutex_unlock(&(x))
 #endif //_MACOS
 
 #include <stdlib.h>
@@ -65,7 +59,7 @@ using namespace std;
 #define BUFFER_SIZE 1048576
 
 #define PROVIDER_VENDOR "<a href='https://www.welees.com' target='_blank'>weLees Co., Ltd.</a>"
-#define PROVIDER_DESCRIPTION PROVIDER_TITLE " Version 4.3"
+#define PROVIDER_DESCRIPTION PROVIDER_TITLE "Version 4.3"
 
 
 typedef struct _SIZE_DESC
@@ -213,7 +207,9 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #endif //_WIN32
 	
 	pTask->Parameter->Result->MatchedCount=0;
-	pTask->InterBuffer=(PUINT8)ALLOC(BUFFER_SIZE+(pSearch->DataSize<<1));//Add padding for search phase across 2 blocks
+	i=((BUFFER_SIZE+pSearch->DataSize+511)/512)*512;//Align by 512 bytes
+	pTask->InterBuffer=(PUINT8)ALLOC(i);
+	pTask->AccessBuffer=(PUINT8)((((UINT64)pTask->InterBuffer+pSearch->DataSize+511)/512)*512);
 	uSearchSize=pSearch->LastOffset-pSearch->StartOffset;
 	uOffsetInBlock=(UINT)(pSearch->StartOffset%BUFFER_SIZE);
 	pTask->Parameter->StartOffset-=uOffsetInBlock;//Align with read block
@@ -230,18 +226,11 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 	{//Normal searching
 		while((uSearchSize>=pSearch->DataSize)&&(!(pSearch->Result->Status&_SEARCH_STATUS_STOPPING)))
 		{
-			pTask->SearchPoint=pTask->InterBuffer+uOffsetInBlock;
-#if defined(_DEBUG)&&defined(_WIN32)
-			{
-				char sz[256];
-				sprintf(sz,"Read offset %I64XH.\n",pSearch->StartOffset);
-				OutputDebugString(sz);
-			}
-#endif //_DEBUG
+			pTask->SearchPoint=pTask->AccessBuffer+uOffsetInBlock-uBufferSize;
 #ifdef _WIN32
-			if(!ReadFile(pTask->Device,pTask->InterBuffer+uBufferSize,BUFFER_SIZE,&u,NULL))
+			if(!ReadFile(pTask->Device,pTask->AccessBuffer,BUFFER_SIZE,&u,NULL))
 #else //_WIN32
-			u=i=(int)read(pTask->Device,pTask->InterBuffer+uBufferSize,BUFFER_SIZE);
+			u=i=(int)read(pTask->Device,pTask->AccessBuffer,BUFFER_SIZE);
 			if(i<=0)
 #endif //_WIN32
 			{
@@ -285,7 +274,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 						pSearch->Result->CurrentOffset+=uSize;
 						if(uBufferSize<pSearch->DataSize)
 						{//the remain data is less than search data, combine it with next blocks
-							memcpy(pTask->InterBuffer,pTask->SearchPoint,uBufferSize);
+							memcpy(pTask->AccessBuffer-uBufferSize,pTask->SearchPoint,uBufferSize);
 							uOffsetInBlock=0;
 							break;
 						}
@@ -336,9 +325,9 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 									printf("The matched count in block %I64XH is %d, Match offset %XH.\n",pBlock->BlockOffset,pBlock->MatchedCount,pBlock->CaseOffsetInBlock[pBlock->MatchedCount-1]);
 								}
 #endif //_DEBUG
-
+								
 								UNLOCK(pTask->Parameter->Result->Lock);
-
+								
 								pTask->SearchPoint+=pSearch->DataSize;
 								pSearch->Result->CurrentOffset+=pSearch->DataSize;
 								uBufferSize-=pSearch->DataSize;
