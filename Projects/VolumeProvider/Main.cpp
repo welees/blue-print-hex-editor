@@ -2,8 +2,6 @@
 #include <Windows.h>
 #include <crtdbg.h>
 #define PROVIDER_TITLE (PCHAR)"weLees Windows VolumesProvider"
-#define LOCK(x) while(InterlockedExchange(&(x),1));
-#define UNLOCK(x) InterlockedExchange(&(x),0);
 #else //_WIN32
 typedef int BOOL;
 typedef char CHAR,*PCHAR;
@@ -20,8 +18,6 @@ typedef void *PVOID;
 
 #ifndef _MACOS
 #define PROVIDER_TITLE (PCHAR)"weLees Linux PartsProvider"
-#define LOCK(x) pthread_spin_lock(&(x));
-#define UNLOCK(x) pthread_spin_unlock(&(x))
 
 #include <linux/fs.h>
 #include <linux/hdreg.h>
@@ -33,8 +29,6 @@ typedef void *PVOID;
 #define MOUNT_COMMAND (char*)"mount|grep '/dev/d'|awk '{print $1\" \"$3}'|sed 's@/dev/@/dev/r@'"
 #define PROVIDER_TITLE "weLees Apple OSX PartsProvider"
 #include <sys/disk.h>
-#define LOCK(x) pthread_mutex_lock(&(x))
-#define UNLOCK(x) pthread_mutex_unlock(&(x))
 #endif //_MACOS
 #include <stdlib.h>
 #include <fcntl.h>
@@ -193,7 +187,9 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #endif //_WIN32
 	
 	pTask->Parameter->Result->MatchedCount=0;
-	pTask->InterBuffer=(PUINT8)ALLOC(BUFFER_SIZE+(pSearch->DataSize<<1));//Add padding for search phase across 2 blocks
+	i=((BUFFER_SIZE+pSearch->DataSize+511)/512)*512;//Align by 512 bytes
+	pTask->InterBuffer=(PUINT8)ALLOC(i);
+	pTask->AccessBuffer=(PUINT8)((((UINT64)pTask->InterBuffer+pSearch->DataSize+511)/512)*512);
 	uSearchSize=pSearch->LastOffset-pSearch->StartOffset;
 	uOffsetInBlock=(UINT)(pSearch->StartOffset%BUFFER_SIZE);
 	pTask->Parameter->StartOffset-=uOffsetInBlock;//Align with read block
@@ -210,18 +206,11 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 	{//Normal searching
 		while((uSearchSize>=pSearch->DataSize)&&(!(pSearch->Result->Status&_SEARCH_STATUS_STOPPING)))
 		{
-			pTask->SearchPoint=pTask->InterBuffer+uOffsetInBlock;
-#if defined(_DEBUG)&&defined(_WIN32)
-			{
-				char sz[256];
-				sprintf(sz,"Read offset %I64XH.\n",pSearch->StartOffset);
-				OutputDebugString(sz);
-			}
-#endif //_DEBUG
+			pTask->SearchPoint=pTask->AccessBuffer+uOffsetInBlock-uBufferSize;
 #ifdef _WIN32
-			if(!ReadFile(pTask->Device,pTask->InterBuffer+uBufferSize,BUFFER_SIZE,&u,NULL))
+			if(!ReadFile(pTask->Device,pTask->AccessBuffer,BUFFER_SIZE,&u,NULL))
 #else //_WIN32
-			u=i=(int)read(pTask->Device,pTask->InterBuffer+uBufferSize,BUFFER_SIZE);
+			u=i=(int)read(pTask->Device,pTask->AccessBuffer,BUFFER_SIZE);
 			if(i<=0)
 #endif //_WIN32
 			{
@@ -265,7 +254,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 						pSearch->Result->CurrentOffset+=uSize;
 						if(uBufferSize<pSearch->DataSize)
 						{//the remain data is less than search data, combine it with next blocks
-							memcpy(pTask->InterBuffer,pTask->SearchPoint,uBufferSize);
+							memcpy(pTask->AccessBuffer-uBufferSize,pTask->SearchPoint,uBufferSize);
 							uOffsetInBlock=0;
 							break;
 						}
@@ -275,7 +264,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 							{//Found!
 								LOCK(pTask->Parameter->Result->Lock);//Insert result
 								pTask->Parameter->Result->MatchedCount++;
-
+								
 								pBlock=pPrev=pTask->Parameter->Result->MatchItems;
 								for(;pBlock;pPrev=pBlock,pBlock=pBlock->Next)
 								{//Find matched block
@@ -313,12 +302,12 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 									char sz[256];
 									sprintf(sz,"The matched count in block %I64XH is %d, Match offset %XH.\n",pBlock->BlockOffset,pBlock->MatchedCount,pBlock->CaseOffsetInBlock[pBlock->MatchedCount-1]);
 									OutputDebugString(sz);
-									printf("The matched count in block %I64XH is %d, Match offset %XH.\n",pBlock->BlockOffset,pBlock->MatchedCount,pBlock->CaseOffsetInBlock[pBlock->MatchedCount-1]);
+									printf(sz);
 								}
 #endif //_DEBUG
-
+								
 								UNLOCK(pTask->Parameter->Result->Lock);
-
+								
 								pTask->SearchPoint+=pSearch->DataSize;
 								pSearch->Result->CurrentOffset+=pSearch->DataSize;
 								uBufferSize-=pSearch->DataSize;
@@ -359,9 +348,9 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #ifdef _WIN32
 
 #ifndef _WINDOWS_SDK_5_UP
-#pragma message("If compiler report the structure _DISK_GEOMETRY_EX and other structure were defined, please define _WINDOWS_SDK_5_UP to handl it and build again.")
+#pragma message("If compiler report the structure _DISK_GEOMETRY_EX and other structure were defined, please define _WINDOWS_SDK_5_UP to handle it and build again.")
 typedef enum _MEDIA_TYPE {
-    Unknown,                // Format is unknown
+	Unknown,                // Format is unknown
 	F5_1Pt2_512,            // 5.25", 1.2MB,  512 bytes/sector
 	F3_1Pt44_512,           // 3.5",  1.44MB, 512 bytes/sector
 	F3_2Pt88_512,           // 3.5",  2.88MB, 512 bytes/sector
@@ -607,7 +596,7 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 				SetFilePointerEx(hDevice,*((PLARGE_INTEGER)&pAccess->ByteOffset),NULL,FILE_BEGIN);
 				{
 					char sz[256];
-					sprintf(sz,"Read offset %I64XH\n",pAccess->ByteOffset);
+					sprintf_s(sz,sizeof(sz),"Read offset %I64XH\n",pAccess->ByteOffset);
 					OutputDebugString(sz);
 				}
 				if(!ReadFile(hDevice,pAccess->Buffer,pAccess->Size,&u,NULL))
