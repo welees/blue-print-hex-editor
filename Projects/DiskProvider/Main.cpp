@@ -3,8 +3,6 @@
 #include <crtdbg.h>
 
 #define PROVIDER_TITLE (PCHAR)"weLees Windows DiskProvider"
-#define LOCK(x) while(InterlockedExchange(&(x),1));
-#define UNLOCK(x) InterlockedExchange(&(x),0);
 #else //_WIN32
 typedef int BOOL;
 typedef char CHAR,*PCHAR;
@@ -21,8 +19,6 @@ typedef void *PVOID;
 
 #ifndef _MACOS
 #define PROVIDER_TITLE (PCHAR)"weLees Linux DiskProvider"
-#define LOCK(x) pthread_spin_lock(&(x));
-#define UNLOCK(x) pthread_spin_unlock(&(x))
 #include <linux/fs.h>
 #include <linux/hdreg.h>
 #else //_MACOS
@@ -30,8 +26,6 @@ typedef void *PVOID;
 #define lseek64 lseek
 #define PROVIDER_TITLE (PCHAR)"weLees Apple OSX DiskProvider"
 #include <sys/disk.h>
-#define LOCK(x) pthread_mutex_lock(&(x))
-#define UNLOCK(x) pthread_mutex_unlock(&(x))
 #endif //_MACOS
 #include <stdlib.h>
 #include <fcntl.h>
@@ -90,10 +84,11 @@ void ShowSize(OUT PCHAR pBuffer,IN int iBufferSize,IN UINT64 uBytes,IN UINT uSec
 	}
 	
 #if _MSC_VER<1300
-	sprintf(pBuffer,"%.2f %s<br>Sector Size %d Bytes",(double)((INT64)uBytes)/(double)((INT64)sdSize[i].Size),sdSize[i].Unit,uSectorSize);
+	sprintf(pBuffer,
 #else
-	sprintf_s(pBuffer,iBufferSize,"%.2f %s<br>Sector Size %d Bytes",(double)((INT64)uBytes)/(double)((INT64)sdSize[i].Size),sdSize[i].Unit,uSectorSize);
+	sprintf_s(pBuffer,iBufferSize,
 #endif
+		"%.2f %s<br>Sector Size %d Bytes",(double)((INT64)uBytes)/(double)((INT64)sdSize[i].Size),sdSize[i].Unit,uSectorSize);
 }
 
 
@@ -189,7 +184,9 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 #endif //_WIN32
 	
 	pTask->Parameter->Result->MatchedCount=0;
-	pTask->InterBuffer=(PUINT8)ALLOC(BUFFER_SIZE+(pSearch->DataSize<<1));//Add padding for search phase across 2 blocks
+	i=((BUFFER_SIZE+pSearch->DataSize+511)/512)*512;//Align by 512 bytes
+	pTask->InterBuffer=(PUINT8)ALLOC(i);
+	pTask->AccessBuffer=(PUINT8)((((UINT64)pTask->InterBuffer+pSearch->DataSize+511)/512)*512);
 	uSearchSize=pSearch->LastOffset-pSearch->StartOffset;
 	uOffsetInBlock=(UINT)(pSearch->StartOffset%BUFFER_SIZE);
 	pTask->Parameter->StartOffset-=uOffsetInBlock;//Align with read block
@@ -206,18 +203,11 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 	{//Normal searching
 		while((uSearchSize>=pSearch->DataSize)&&(!(pSearch->Result->Status&_SEARCH_STATUS_STOPPING)))
 		{
-			pTask->SearchPoint=pTask->InterBuffer+uOffsetInBlock;
-#if defined(_DEBUG)&&defined(_WIN32)
-			{
-				char sz[256];
-				sprintf(sz,"Read offset %I64XH.\n",pSearch->StartOffset);
-				OutputDebugString(sz);
-			}
-#endif //_DEBUG
+			pTask->SearchPoint=pTask->AccessBuffer+uOffsetInBlock-uBufferSize;
 #ifdef _WIN32
-			if(!ReadFile(pTask->Device,pTask->InterBuffer+uBufferSize,BUFFER_SIZE,&u,NULL))
+			if(!ReadFile(pTask->Device,pTask->AccessBuffer,BUFFER_SIZE,&u,NULL))
 #else //_WIN32
-			u=i=(int)read(pTask->Device,pTask->InterBuffer+uBufferSize,BUFFER_SIZE);
+			u=i=(int)read(pTask->Device,pTask->AccessBuffer,BUFFER_SIZE);
 			if(i<=0)
 #endif //_WIN32
 			{
@@ -261,7 +251,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 						pSearch->Result->CurrentOffset+=uSize;
 						if(uBufferSize<pSearch->DataSize)
 						{//the remain data is less than search data, combine it with next blocks
-							memcpy(pTask->InterBuffer,pTask->SearchPoint,uBufferSize);
+							memcpy(pTask->AccessBuffer-uBufferSize,pTask->SearchPoint,uBufferSize);
 							uOffsetInBlock=0;
 							break;
 						}
@@ -271,7 +261,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 							{//Found!
 								LOCK(pTask->Parameter->Result->Lock);//Insert result
 								pTask->Parameter->Result->MatchedCount++;
-
+								
 								pBlock=pPrev=pTask->Parameter->Result->MatchItems;
 								for(;pBlock;pPrev=pBlock,pBlock=pBlock->Next)
 								{//Find matched block
@@ -312,9 +302,9 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 									printf("The matched count in block %I64XH is %d, Match offset %XH.\n",pBlock->BlockOffset,pBlock->MatchedCount,pBlock->CaseOffsetInBlock[pBlock->MatchedCount-1]);
 								}
 #endif //_DEBUG
-
+								
 								UNLOCK(pTask->Parameter->Result->Lock);
-
+								
 								pTask->SearchPoint+=pSearch->DataSize;
 								pSearch->Result->CurrentOffset+=pSearch->DataSize;
 								uBufferSize-=pSearch->DataSize;
@@ -353,6 +343,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 
 //#define _WINDOWS_SDK_5_UP
 #ifdef _WIN32
+
 #ifndef _WINDOWS_SDK_5_UP
 #pragma message("If compiler report the structure _DISK_GEOMETRY_EX and other structure were defined, please define _WINDOWS_SDK_5_UP to handle it and build again.")
 typedef enum _MEDIA_TYPE {
@@ -392,7 +383,7 @@ typedef struct _DISK_GEOMETRY {
 
 
 typedef struct _DISK_GEOMETRY_EX
- {
+{
 	DISK_GEOMETRY Geometry;                                 // Standard disk geometry: may be faked by driver.
 	LARGE_INTEGER DiskSize;                                 // Must always be correct
 	BYTE          Data[1];                                                  // Partition, Detect info
