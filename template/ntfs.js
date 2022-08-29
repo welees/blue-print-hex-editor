@@ -12,7 +12,7 @@ function RegisterStructures()
 		Type:"datarunheader",
 		Name:"Data Run",
 		Size:["",1], //For fixed size structure
-		Parameters:{RunOffset:'0',ClusterSize:"1000",StartSector:'0',SectorSize:'200'},
+		Parameters:{RunOffset:'0',ClusterSize:"1000",StartSector:'0',BytesPerSector:'200',ClusterIndex:'0'},
 		Members:
 		[
 			{
@@ -26,7 +26,7 @@ function RegisterStructures()
 					{
 						o=s>>4;
 						s%=16;
-						return [""+o+"H/"+s+"H",0];
+						return [""+o+"/"+s,0];
 					}
 					else
 					{
@@ -40,8 +40,8 @@ function RegisterStructures()
 			var s=parseInt(This.Val.header,16),k;
 			if(s)
 			{
-				This.Parameters.OffsetSize=s>>4;
-				This.Parameters.SizeSize=s%16;
+				Parameters.OffsetSize=s>>4;
+				Parameters.SizeSize=s%16;
 				return [
 							{Name:"runsize",Desc:"Run Size",Type:["NTFS_variablesize","",s%16]},
 							{Name:"runoffset",Desc:"Run Offset",Type:["NTFS_variableoffset","",s>>4]},
@@ -50,17 +50,6 @@ function RegisterStructures()
 			else
 			{
 				return [];
-			}
-		},
-		Neighbor:function(Parameters,This,Base)
-		{
-			if(parseInt(This.Val.header,16))
-			{
-				return [["NTFS","datarunheader"]];//Multiple type maybe
-			}
-			else
-			{
-				return [];//No neighbor, empty array
 			}
 		}
 	};
@@ -75,7 +64,7 @@ function RegisterStructures()
 		Type:"variableoffset",
 		Name:"* Data Run Offset",
 		Size:["OffsetSize",1], //For fixed size structure
-		Parameters:{OffsetSize:'1',RunOffset:'0',ClusterSize:"1000",StartSector:'0',SectorSize:'200'},
+		Parameters:{OffsetSize:'1',RunOffset:'0',ClusterSize:"1000",StartSector:'0',BytesPerSector:'200',PreSize:'0'},
 		Size:0, //For dynamical size structure
 		Members:
 		[
@@ -85,32 +74,33 @@ function RegisterStructures()
 				Type:["uhex","OffsetSize",1],
 				Value:function(Parameters,This,Base)
 				{
-					var c=This.Val.body.replace(/\b(0+)/gi,""),d;
-					c=c==''?'0':c;
+					var c=This.Val.body,d,e;
 					d=parseInt(c[0],16);
-					if((!c.length&1)&&(d>8))
+					if((!(c.length&1))&&(d>7))
 					{//Negtive
-						c=MegaHexSubU(1+_padStart('0',c.length),c);
-						if(MegaHexCompU(Parameters.RunOffset,c)<0)
+						e=MegaHexSubU(1+_padStart('0',c.length),c);
+						if(MegaHexCompU(Parameters.RunOffset,e)<0)
 						{
-							return ["Bad offset/"+This.Val.body,-1];
+							return ["No. "+Parameters.ClusterIndex+"H,Bad offset/"+This.Val.body+"H",-1];
 						}
-						d=MegaHexSubU(Parameters.RunOffset,c);
+						d=MegaHexSubU(Parameters.RunOffset,e);
+						c=["No. "+Parameters.ClusterIndex+"H,@"+d+"H/(-"+e+"H)",0];
 					}
 					else
 					{
 						d=MegaHexAddU(Parameters.RunOffset,c);
+						c=["No. "+Parameters.ClusterIndex+"H,@"+d+"H/(+"+c+"H)",0];
 					}
-					This.Parameters.RunOffset=d;
-					return [d+"H/(+"+c+"H)",0];
+					Parameters.ClusterIndex=MegaHexAddU(Parameters.ClusterIndex,Parameters.PreSize);
+					Parameters.RunOffset=d;
+					return c;
 				},
-	/*
-				Ref:function(Parameters,This,Base)
-				{
-				}
-	*/
 			}
-		]
+		],
+		Next:function(Parameters,This,Base)
+		{
+			return [{Name:"datarunheader",Desc:"Data Run",Type:["NTFS_datarunheader","",1]}];
+		},
 	};
 	
 	var variablesize=
@@ -134,6 +124,7 @@ function RegisterStructures()
 				Value:function(Parameters,This,Base)
 				{
 					var c=This.Val.body.replace(/\b(0+)/gi,"");
+					Parameters.PreSize=c;
 					return [(c==''?'0':c)+'H',0];
 				},
 			}
@@ -147,10 +138,10 @@ function RegisterStructures()
 		Group:"FileSystem",
 		Comment:"NTFS Boot Record, the first sector in NTFS Volume",
 		Author:"Ares Lee from welees.com",
-		Type:"bootrecord",
+		Type:"ntfsbootrecord",
 		Name:"NTFS Boot Record",
 		Size:["",4096], //For fixed size structure
-		Parameters:{StartSector:'0',TotalSetors:'10000',SectorSize:'200'},
+		Parameters:{StartSector:'0',TotalSectors:'10000',BytesPerSector:'200'},
 		Members:
 		[
 			{
@@ -207,8 +198,13 @@ function RegisterStructures()
 					{
 						R[1]=1;
 					}
+					else if(R[0]>128)
+					{
+						R[0]=1<<(256-R[0]);
+						R[1]=1;
+					}
 					
-					This.Parameters.ClusterSize=R[0]*parseInt(This.Val.bps,16);
+					Parameters.ClusterSize=R[0]*parseInt(This.Val.bps,16);
 					R[0]=getSize(R[0]*parseInt(This.Val.bps,16))+"("+This.Val.spc+"H)";
 					return R;
 				},
@@ -269,7 +265,7 @@ function RegisterStructures()
 				Type:["uhex","",8],
 				Value:function(Parameters,This,Base)
 				{
-					return [getSize(parseInt(MegaHexMulU(Parameters.SectorSize,This.Val.totalsectors),16))+"("+AbbrValue(This.Val.totalsectors)+"H)",MegaHexCompU(This.Val.totalsectors,Parameters.TotalSectors)<0?1:-1];
+					return [getSize(parseInt(MegaHexMulU(Parameters.BytesPerSector,This.Val.totalsectors),16))+"("+AbbrValue(This.Val.totalsectors)+"H)",MegaHexCompU(This.Val.totalsectors,Parameters.TotalSectors)<0?1:-1];
 				},
 			},
 			{
@@ -282,9 +278,9 @@ function RegisterStructures()
 				},
 				Ref:function(Parameters,This,Base)
 				{
-					var Result={Ref:{Group:"NTFS",Type:["filerecord"]},StartOffset:MegaHexAddU(MegaHexMulU(Parameters.SectorSize,Parameters.StartSector),MegaHexMulU(This.Val.mft,MegaHexMulU(This.Val.spc,This.Val.bps))),Size:"400"};
-					This.Parameters.StartSector=Parameters.StartSector;
-					This.Parameters.StartOffset=Result.StartOffset;
+					var Result={Ref:{Group:"NTFS",Type:["filerecord"]},StartOffset:MegaHexAddU(MegaHexMulU(Parameters.BytesPerSector,Parameters.StartSector),MegaHexMulU(This.Val.mft,MegaHexMulU(This.Val.spc,This.Val.bps))),Size:"400"};
+					Parameters.StartSector=Parameters.StartSector;
+					Parameters.StartOffset=Result.StartOffset;
 					
 					return Result;
 				}
@@ -299,9 +295,9 @@ function RegisterStructures()
 				},
 				Ref:function(Parameters,This,Base)
 				{
-					var Result={Ref:{Group:"NTFS",Type:["filerecord"]},StartOffset:MegaHexAddU(MegaHexMulU(Parameters.SectorSize,Parameters.StartSector),MegaHexMulU(This.Val.mftmirr,MegaHexMulU(This.Val.spc,This.Val.bps))),Size:"400"};
-					This.Parameters.StartSector=Parameters.StartSector;
-					This.Parameters.StartOffset=Result.StartOffset;
+					var Result={Ref:{Group:"NTFS",Type:["filerecord"]},StartOffset:MegaHexAddU(MegaHexMulU(Parameters.BytesPerSector,Parameters.StartSector),MegaHexMulU(This.Val.mftmirr,MegaHexMulU(This.Val.spc,This.Val.bps))),Size:"400"};
+					Parameters.StartSector=Parameters.StartSector;
+					Parameters.StartOffset=Result.StartOffset;
 					
 					return Result;
 				}
@@ -315,12 +311,12 @@ function RegisterStructures()
 					var v=parseInt(This.Val.frsize,16);
 					if(v<128)
 					{
-						This.Parameters.FileRecordSize=(v*parseInt(This.Val.spc,16)*parseInt(This.Val.bps,16)).toString(16);
+						Parameters.FileRecordSize=(v*parseInt(This.Val.spc,16)*parseInt(This.Val.bps,16)).toString(16);
 						return [getSize(v*parseInt(This.Val.spc,16)*parseInt(This.Val.bps,16))+"("+This.Val.frsize+"H)",0];
 					}
 					else
 					{
-						This.Parameters.FileRecordSize=(1<<(256-v)).toString(16);
+						Parameters.FileRecordSize=(1<<(256-v)).toString(16);
 						return [getSize(1<<(256-v))+"("+This.Val.frsize+"H)",0];
 					}
 				},
@@ -339,12 +335,12 @@ function RegisterStructures()
 					var v=parseInt(This.Val.irsize,16);
 					if(v<128)
 					{
-						This.Parameters.IndexRecordSize=(v*parseInt(This.Val.spc,16)*parseInt(This.Val.bps,16)).toString(16);
+						Parameters.IndexRecordSize=(v*parseInt(This.Val.spc,16)*parseInt(This.Val.bps,16)).toString(16);
 						return [getSize(v*parseInt(This.Val.spc,16)*parseInt(This.Val.bps,16))+"("+This.Val.irsize+"H)",0];
 					}
 					else
 					{
-						This.Parameters.IndexRecordSize=(1<<(256-v)).toString(16);
+						Parameters.IndexRecordSize=(1<<(256-v)).toString(16);
 						return [getSize(1<<(256-v))+"("+This.Val.irsize+"H)",0];
 					}
 				},
@@ -377,7 +373,7 @@ function RegisterStructures()
 		Type:"filerecord",
 		Name:"NTFS File Record",
 		Size:["FileRecordSize",1024], //For fixed size structure
-		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSetors:'10000',SectorsPerCluster:"8",SectorSize:'200'},
+		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
 		Members:
 		[
 			{
@@ -441,7 +437,7 @@ function RegisterStructures()
 				Ref:function(Parameters,This,Base)
 				{
 					var Result={Ref:{Group:"NTFS",Type:["attrhead"]},StartOffset:MegaHexAddU(Base,This.Val.attroffset),Size:Parameters.FileRecordSize};
-					//This.Parameters.StartSector=Parameters.StartSector;
+					Parameters.StartSector=Parameters.StartSector;
 					
 					return Result;
 				}
@@ -514,7 +510,7 @@ function RegisterStructures()
 		Type:"indexrecord",
 		Name:"NTFS Index Record",
 		Size:["IndexRecordSize",4096], //For fixed size structure
-		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSetors:'10000',SectorsPerCluster:"8",SectorSize:'200'},
+		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
 		Members:
 		[
 			{
@@ -574,86 +570,17 @@ function RegisterStructures()
 		]
 	};
 	
-	var clientrecord=
-	{
-		Vendor:"weLees Co., LTD",
-		Ver:"1.0.0",
-		Group:"NTFS",
-		Comment:"NTFS Log Client Record",
-		Author:"Ares Lee from welees.com",
-		Type:"clientrecord",
-		Name:"NTFS Log Client Record",
-		Size:["",160], //For fixed size structure
-		Parameters:{SystemPageSize:'1000',LogPageSize:'1000',FileRecordSize:'400',IndexRecordSize:"1000",TotalSetors:'10000',SectorsPerCluster:"8",SectorSize:'200'},
-		Members:
-		[
-			{
-				Name:"oldestlsn",
-				Desc:"Oldest LSN",
-				Type:["uhex","",8],
-/*
-				Value:function(Parameters,This,Base)
-				{
-					if(This.Val.signature=='52545352')
-					{
-						return ["RSTR",1];
-					}
-					else
-					{
-						return [This.Val.signature,-1];
-					}
-				},
-*/
-			},
-			{
-				Name:"clientrestartlsn",
-				Desc:"LSN of Client Restart",
-				Type:["uhex","",8],
-			},
-			{
-				Name:"prevclient",
-				Desc:"Previous Client",
-				Type:["uhex","",2],
-			},
-			{
-				Name:"nextclient",
-				Desc:"Next Client",
-				Type:["uhex","",2],
-			},
-			{
-				Name:"seqnum",
-				Desc:"Sequence Number",
-				Type:["uhex","",2],
-			},
-			{
-				Name:"pad",
-				Desc:"Pad",
-				Type:["uhex","",6],
-			},
-			{
-				Name:"clientnamelength",
-				Desc:"Client Name Length",
-				Type:["uhex","",4],
-			},
-			{
-				Name:"clientname",
-				Desc:"Client Name",
-				Type:["unicode16","",128],
-			},
-		],
-	};
-	
 	var frr=
 	{
 		Vendor:"weLees Co., LTD",
 		Ver:"1.0.0",
 		Group:"NTFS",
-		Comment:"NTFS File Record Referencer",
+		Comment:"NTFS File Record Reference",
 		Author:"Ares Lee from welees.com",
 		Type:"frr",
-		Name:"File Record Referencer",
+		Name:"File Record Reference",
 		Size:["",8], //For fixed size structure
-		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSetors:'10000',SectorsPerCluster:"8",SectorSize:'200'},
+		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
 		Members:
 		[
 			{
@@ -687,7 +614,7 @@ function RegisterStructures()
 		Type:"attrhead",
 		Name:"Attribute",
 		Size:["",16],
-		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSetors:'10000',SectorsPerCluster:"8",SectorSize:'200'},
+		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
 		Members:
 		[
 			{
@@ -733,7 +660,7 @@ function RegisterStructures()
 						case 0xffffffff:
 							return ['Last Node(FFFFFFFFH)',1];
 						default:
-							return ['Unknown type('+AbbrValue(This.Val.type)+"H)",1];
+							return ['Unknown type('+AbbrValue(This.Val.type)+"H)",-1];
 					}
 				},
 			},
@@ -801,27 +728,24 @@ function RegisterStructures()
 		Next:function(Parameters,This,Base)
 		{
 			var r=[];
-			This.Parameters.type=This.Val.type;
+			Parameters.type=This.Val.type;
 			if(This.Val.nonresidentflag=='00')
 			{
 				r.push({Name:"resident",Desc:"Resident Data",Type:["NTFS_resident","",8]});
-				if(This.Val.namesize!='00')
-				{
-					This.Parameters.NameSize=parseInt(This.Val.namesize,16);
-				}
+				Parameters.NameSize=parseInt(This.Val.namesize,16);
 			}
 			else
 			{
 				r.push({Name:"nonresident",Desc:"Nonresident Data",Type:["NTFS_nonresident","",48]});
-				This.Parameters.StartSector=Parameters.StartSector;
-				debugger;
-				This.Parameters.NameSize=parseInt(This.Val.namesize,16);
+				Parameters.StartSector=Parameters.StartSector;
+				Parameters.NameSize=parseInt(This.Val.namesize,16);
 				if(This.Val.namesize!='00')
 				{
-					r.push({Name:"name",Desc:"Attribute Name",Type:["unicode16","",parseInt((This.Parameters.NameSize*2+7)/8)*8]});
+					r.push({Name:"name",Desc:"Attribute Name",Type:["unicode16","",parseInt((Parameters.NameSize*2+7)/8)*8]});
 				}
-				This.Parameters.DataRunLength=parseInt(This.Val.size,16)-64-parseInt((This.Parameters.NameSize*2+7)/8)*8;
-				r.push({Name:"dataruns",Desc:"Data Runs",Type:["ntfsdatarun","",This.Parameters.DataRunLength]});
+				Parameters.DataRunLength=parseInt(This.Val.size,16)-64-parseInt((Parameters.NameSize*2+7)/8)*8;
+				Parameters.ClusterIndex='0';
+				r.push({Name:"dataruns",Desc:"Data Runs",Type:["NTFS_datarunheader","",Parameters.DataRunLength]});
 			}
 			
 			return r;
@@ -834,7 +758,7 @@ function RegisterStructures()
 			}
 			else
 			{
-				return [[]];
+				return [];
 			}
 		}
 	}
@@ -842,20 +766,24 @@ function RegisterStructures()
 	var resident=
 	{
 		Vendor:"weLees Co., LTD",
-		Ver:"1.0.0",
+		Ver:"2.0.0",
 		Group:"NTFS",
 		Comment:"NTFS resident data desciption of attribute, it is part of attribute",
 		Author:"Ares Lee from welees.com",
 		Type:"resident",
 		Name:"* Resident Data",
 		Size:["",8],
-		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSetors:'10000',SectorsPerCluster:"8",SectorSize:'200'},
+		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
 		Members:
 		[
 			{
 				Name:"datalength",
 				Desc:"Data Length",
 				Type:["uhex","",4],
+				Value:function(Parameters,This,Base)
+				{
+					return [AbbrValue(This.Val.datalength)+"H("+parseInt(This.Val.datalength,16)+")",0];
+				},
 			},
 			{
 				Name:"dataoffset",
@@ -863,7 +791,7 @@ function RegisterStructures()
 				Type:["uhex","",2],
 				Value:function(Parameters,This,Base)
 				{
-					return [AbbrValue(This.Val.dataoffset),0];
+					return [AbbrValue(This.Val.dataoffset)+"H",0];
 				},
 			},
 			{
@@ -879,61 +807,62 @@ function RegisterStructures()
 		],
 		Next:function(Parameters,This,Base)
 		{
-			var r=[];
-			if(This.Parameters.NameSize)
+			var r=[],s=parseInt(This.Val.datalength,16);
+			if(Parameters.NameSize)
 			{
-				r.push({Name:"name",Desc:"Attribute Name",Type:["unicode16","",parseInt((This.Parameters.NameSize*2+7)/8)*8]});
+				r.push({Name:"name",Desc:"Attribute Name",Type:["unicode16","",parseInt((Parameters.NameSize*2+7)/8)*8]});
 			}
-			switch(parseInt(This.Parameters.type,16))
+			s=parseInt((s+7)/8)*8;
+			switch(parseInt(Parameters.type,16))
 			{
 				case 16:
-					r.push({Name:"si",Desc:"Standard Information",Type:["NTFS_si","",parseInt(This.Val.datalength,16)]});
+					r.push({Name:"si",Desc:"Standard Information",Type:["NTFS_si","",s]});
 					break;
 				case 32:
-					r.push({Name:"al",Desc:"Attribute List",Type:["NTFS_al","",parseInt(This.Val.datalength,16)]});
+					r.push({Name:"al",Desc:"Attribute List",Type:["NTFS_al","",s]});
 					break;
 				case 48:
-					r.push({Name:"fn",Desc:"File Name",Type:["NTFS_fn","",parseInt(This.Val.datalength,16)]});
+					r.push({Name:"fn",Desc:"File Name",Type:["NTFS_fn","",s]});
 					break;
 				case 64:
-					r.push({Name:"oi",Desc:"Object ID",Type:["guid","",parseInt(This.Val.datalength,16)]});
+					r.push({Name:"oi",Desc:"Object ID",Type:["guid","",s]});
 					break;
 				case 80:
-					r.push({Name:"sd",Desc:"Security Descriptor",Type:["NTFS_sd","",parseInt(This.Val.datalength,16)]});
+					r.push({Name:"sd",Desc:"Security Descriptor",Type:["NTFS_sd","",s]});
 					break;
 				case 96:
-					r.push({Name:"vn",Desc:"Volume Name",Type:["unicode16","",parseInt((parseInt(This.Val.datalength,16)+7)/8)*8]});
+					r.push({Name:"vn",Desc:"Volume Name",Type:["unicode16","",s]});
 					break;
 				case 112:
-					r.push({Name:"vi",Desc:"Volume Information",Type:["NTFS_vi","",parseInt(This.Val.datalength,16)]});
+					r.push({Name:"vi",Desc:"Volume Information",Type:["NTFS_vi","",s]});
 					break;
 				case 128:
-					r.push({Name:"d",Desc:"Data",Type:["ntfsdatarun","",parseInt((parseInt(This.Val.datalength,16)+7)/8)*8]});
+					r.push({Name:"d",Desc:"Data",Type:["bytearray","",s]});
 					break;
 				case 144:
 					r.push({Name:"ir",Desc:"Index Root",Type:["NTFS_ir","",16]});
-					r.push({Name:"ih",Desc:"Index Header",Type:["NTFS_ih","",parseInt(This.Val.datalength,16)-16]});
+					r.push({Name:"ih",Desc:"Index Header",Type:["NTFS_ih","",s-16]});
 					break;
 				case 160:
-					r.push({Name:"ia",Desc:"Index Allocation",Type:["NTFS_ia","",parseInt(This.Val.datalength,16)]});
+					r.push({Name:"ia",Desc:"Index Allocation",Type:["NTFS_ia","",s]});
 					break;
 				case 176:
-					r.push({Name:"b",Desc:"Bitmap",Type:["bytearray","",parseInt((parseInt(This.Val.datalength,16)+7)/8)*8]});
+					r.push({Name:"b",Desc:"Bitmap",Type:["bytearray","",s]});
 					break;
 				case 192:
-					r.push({Name:"sl",Desc:"Symbolic Link",Type:["NTFS_sl","",parseInt(This.Val.datalength,16)]});
+					r.push({Name:"sl",Desc:"Symbolic Link",Type:["NTFS_sl","",s]});
 					break;
 				case 208:
-					r.push({Name:"eai",Desc:"EA Information",Type:["NTFS_eai","",parseInt(This.Val.datalength,16)]});
+					r.push({Name:"eai",Desc:"EA Information",Type:["NTFS_eai","",s]});
 					break;
 				case 224:
-					r.push({Name:"ea",Desc:"EA",Type:["NTFS_ea","",parseInt(This.Val.datalength,16)]});
+					r.push({Name:"ea",Desc:"EA",Type:["NTFS_ea","",s]});
 					break;
 				case 240:
-					r.push({Name:"ps",Desc:"Property Set",Type:["NTFS_ps","",parseInt(This.Val.datalength,16)]});
+					r.push({Name:"ps",Desc:"Property Set",Type:["NTFS_ps","",s]});
 					break;
 				case 256:
-					r.push({Name:"lus",Desc:"Logged Utility Stream",Type:["NTFS_lus","",parseInt(This.Val.datalength,16)]});
+					r.push({Name:"lus",Desc:"Logged Utility Stream",Type:["NTFS_lus","",s]});
 					break;
 			}
 			
@@ -951,7 +880,7 @@ function RegisterStructures()
 		Type:"nonresident",
 		Name:"* Non-resident Data",
 		Size:["",48],
-		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSetors:'10000',SectorsPerCluster:"8",SectorSize:'200'},
+		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
 		Members:
 		[
 			{
@@ -960,7 +889,7 @@ function RegisterStructures()
 				Type:["uhex","",8],
 				Value:function(Parameters,This,Base)
 				{
-					This.Parameters.RunOffset=This.Val.startvcn;
+					Parameters.RunOffset=This.Val.startvcn;
 					return [AbbrValue(This.Val.startvcn)+"H",0];
 				},
 			},
@@ -1022,7 +951,538 @@ function RegisterStructures()
 		]
 	}
 	
-
+	var ih=
+	{
+		Vendor:"weLees Co., LTD",
+		Ver:"1.0.0",
+		Group:"NTFS",
+		Comment:"Index Data Header, used for $IndexRoot Attribute and IndexRecord",
+		Author:"Ares Lee from welees.com",
+		Type:"ih",
+		Name:"* Index Data Header",
+		Size:["",16],
+		Parameters:{StartSector:'0',Rule:'1',FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
+		Members:
+		[
+			{
+				Name:"entryoffset",
+				Desc:"First Index Entry Offset",
+				Type:["uhex","",4],
+				Value:function(Parameters,This,Base)
+				{
+					return ["+"+AbbrValue(This.Val.entryoffset)+"H",parseInt(This.Val.entryoffset,16)<parseInt(Parameters.IndexRecordSize,16)?1:-1];
+				},
+				Ref:function(Parameters,This,Base)
+				{
+					var Result={Ref:{Group:"NTFS",Type:["ief"]},StartOffset:MegaHexAddU(Base,This.Val.entryoffset),Size:"10"};
+					Parameters.StartSector=Parameters.StartSector;
+					Parameters.StartOffset=Result.StartOffset;
+					
+					switch(AbbrValue(Parameters.Rule))
+					{
+						case '0':
+							debugger;
+							break;
+						case '1':
+							Result.Ref.Type=["ief"];
+							break;
+						case '2':
+							debugger;
+							break;
+						case '10':
+							debugger;
+							break;
+						case '11':
+							Result.Ref.Type=["iesi"];
+							break;
+						case '12':
+							Result.Ref.Type=["iesh"];
+							break;
+						case '13':
+							Result.Ref.Type=["ieoi"];
+							break;
+						default:
+							debugger;
+							break;
+					}
+					return Result;
+				}
+			}, 
+			{
+				Name:"datasize",
+				Desc:"Size of Index Node(Header+Entries)",
+				Type:["uhex","",4],
+			},
+			{
+				Name:"allocatesize",
+				Desc:"Allocated Size",
+				Type:["uhex","",4],
+			},
+			{
+				Name:"flags",
+				Desc:"Flags",
+				Type:["uhex","",4],
+				Value:function(Parameters,This,Base)
+				{
+					var v=parseInt(This.Val.flags,16);
+					if(v&1)
+					{
+						return ["Branch node",1];
+					}
+					else
+					{
+						return ["Leaf node",1];
+					}
+				}
+			},
+		],
+	}
+	
+	var ief=
+	{
+		Vendor:"weLees Co., LTD",
+		Ver:"1.0.0",
+		Group:"NTFS",
+		Comment:"File/Directory Index Entry, to index file object in B tree",
+		Author:"Ares Lee from welees.com",
+		Type:"ief",
+		Name:"Index Entry : File name",
+		Size:["",16],
+		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
+		Members:
+		[
+			{
+				Name:"frr",
+				Desc:"File Record Reference",
+				Type:["NTFS_frr","",8],
+			},
+			{
+				Name:"entrysize",
+				Desc:"Entry Size",
+				Type:["uhex","",2],
+				Value:function(Parameters,This,Base)
+				{
+					return [AbbrValue(This.Val.entrysize)+"H",0];
+				},
+			},
+			{
+				Name:"keysize",
+				Desc:"Key Size",
+				Type:["uhex","",2],
+				Value:function(Parameters,This,Base)
+				{
+					return [AbbrValue(This.Val.keysize)+"H",0];
+				},
+			},
+			{
+				Name:"flags",
+				Desc:"Index Flags",
+				Type:["uhex","",2],
+				Value:function(Parameters,This,Base)
+				{
+					var r=["",0],v=parseInt(This.Val.flags,16);
+					if(v&1)
+					{
+						r[0]+="Branch Entry,";
+					}
+					if(v&2)
+					{
+						r[0]+="Last Entry,";
+					}
+					r[0]=r[0].substr(0,r[0].length-1);
+					return r;
+				},
+			},
+			{
+				Name:"pad",
+				Desc:"Pad",
+				Type:["uhex","",2],
+			},
+		],
+		Next:function(Parameters,This,Base)
+		{
+			var v=parseInt(This.Val.flags,16),r=[];
+			if(!(v&2))
+			{
+				r.push({Name:"fileinfo",Desc:"File Information",Type:["NTFS_fn","",parseInt((parseInt(This.Val.keysize,16)+7)/8)*8]});
+			}
+			if(v&1)
+			{
+				r.push({Name:"childoffset",Desc:"Child Record Virtual Cluster Offset",Type:["uhex","",8]});
+			}
+			
+			return r;
+		},
+		Neighbor:function(Parameters,This,Base)
+		{
+			if(parseInt(This.Val.flags,16)&2)
+			{
+				return [];//No neighbor, empty array
+			}
+			else
+			{
+				return [["NTFS","ief"]];//Multiple type maybe
+			}
+		}
+	}
+	
+	var ir=
+	{
+		Vendor:"weLees Co., LTD",
+		Ver:"1.0.0",
+		Group:"NTFS",
+		Comment:"Data of NTFS Attribute Index Root",
+		Author:"Ares Lee from welees.com",
+		Type:"ir",
+		Name:"* Attribute Data : Index Root",
+		Size:["",16],
+		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
+		Members:
+		[
+			{
+				Name:"type",
+				Desc:"Type",
+				Type:["uhex","",4],
+				Value:function(Parameters,This,Base)
+				{
+					switch(parseInt(This.Val.type,16))
+					{
+						case 16:
+							return ['Standard Information(10H)',1];
+						case 32:
+							return ['Attribute List(20H)',1];
+						case 48:
+							return ['File Name(30H)',1];
+						case 64:
+							return ['Object ID(40H)',1];
+						case 80:
+							return ['Security Descriptor(50H)',1];
+						case 96:
+							return ['Volume Name(60H)',1];
+						case 112:
+							return ['Volume Information(70H)',1];
+						case 128:
+							return ['Data(80H)',1];
+						case 144:
+							return ['Index Root(90H)',1];
+						case 160:
+							return ['Index Allocation(A0H)',1];
+						case 176:
+							return ['Bitmap(B0H)',1];
+						case 192:
+							return ['Symbolic Link(C0H)',1];
+						case 208:
+							return ['EA Information(D0H)',1];
+						case 224:
+							return ['EA(E0H)',1];
+						case 240:
+							return ['Property Set(F0H)',1];
+						case 256:
+							return ['Logged Utility Stream(100H)',1];
+						case 0xffffffff:
+							return ['Last Node(FFFFFFFFH)',1];
+						default:
+							return ['Unknown type('+AbbrValue(This.Val.type)+"H)",-1];
+					}
+				},
+			},
+			{
+				Name:"collationrule",
+				Desc:"Collation Rule",
+				Type:["uhex","",4],
+				Value:function(Parameters,This,Base)
+				{
+					Parameters.Rule=This.Val.collationrule;
+					switch(parseInt(This.Val.collationrule,16))
+					{
+						case 0:
+							return ["Binary(0)",1];
+						case 1:
+							return ["File Name(1)",1];
+						case 2:
+							return ["Unicode(2)",1];
+						case 16:
+							return ["ULONG(10H)",1];
+						case 17:
+							return ["Security ID(11H)",1];
+						case 18:
+							return ["Security Hash(12H)",1];
+						case 19:
+							return ["ULONG List(13H)",1];
+						default:
+							return ["Unknown("+This.Val.collationrule+")",-1];
+					}
+				},
+			},
+			{
+				Name:"irsize",
+				Desc:"Index Record Size",
+				Type:["uhex","",4],
+				Value:function(Parameters,This,Base)
+				{
+					return [getSize(parseInt(This.Val.irsize,16))+"("+AbbrValue(This.Val.irsize)+"H)",MegaHexCompU(This.Val.irsize,Parameters.IndexRecordSize)==0?1:-1];
+				}
+			},
+			{
+				Name:"cpi",
+				Desc:"Clusters per IndexRecord",
+				Type:["uhex","",4],
+			},
+		]
+	}
+	
+	var si=
+	{
+		Vendor:"weLees Co., LTD",
+		Ver:"1.0.0",
+		Group:"NTFS",
+		Comment:"Data of NTFS attribute standard information",
+		Author:"Ares Lee from welees.com",
+		Type:"si",
+		Name:"* Attribute Data : Standard Information",
+		Size:["",48],
+		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
+		Members:
+		[
+			{
+				Name:"createtime",
+				Desc:"Create Time",
+				Type:["uhex","",8],
+			},
+			{
+				Name:"lastwritetime",
+				Desc:"Last Modification Time",
+				Type:["uhex","",8],
+			},
+			{
+				Name:"lastfrwritetime",
+				Desc:"Last FileRecord Modification Time",
+				Type:["uhex","",8],
+			},
+			{
+				Name:"lastaccesstime",
+				Desc:"Last Access Time",
+				Type:["uhex","",8],
+			},
+			{
+				Name:"attributes",
+				Desc:"File Attributes",
+				Type:["uhex","",4],
+			},
+			{
+				Name:"maxvernum",
+				Desc:"Maximum Version Number",
+				Type:["uhex","",4],
+			},
+			{
+				Name:"vernum",
+				Desc:"Version Number",
+				Type:["uhex","",4],
+			},
+			{
+				Name:"reserved",
+				Desc:"Reserved",
+				Type:["uhex","",4],
+			},
+		]
+	}
+	
+	var fn=
+	{
+		Vendor:"weLees Co., LTD",
+		Ver:"1.0.0",
+		Group:"NTFS",
+		Comment:"Data of NTFS attribute file name",
+		Author:"Ares Lee from welees.com",
+		Type:"fn",
+		Name:"* Attribute Data : File Name",
+		Size:["",48],
+		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
+		Members:
+		[
+			{
+				Name:"parent",
+				Desc:"Parent Reference",
+				Type:["NTFS_frr","",8],
+			},
+			{
+				Name:"createtime",
+				Desc:"Create Time",
+				Type:["uhex","",8],
+			},
+			{
+				Name:"lastwritetime",
+				Desc:"Last Modification Time",
+				Type:["uhex","",8],
+			},
+			{
+				Name:"lastfrwritetime",
+				Desc:"Last FileRecord Modification Time",
+				Type:["uhex","",8],
+			},
+			{
+				Name:"lastaccesstime",
+				Desc:"Last Access Time",
+				Type:["uhex","",8],
+			},
+			{
+				Name:"allocatesize",
+				Desc:"Allocated Size",
+				Type:["uhex","",8],
+				Value:function(Parameters,This,Base)
+				{
+					return [getSize(parseInt(This.Val.allocatesize,16))+"("+AbbrValue(This.Val.allocatesize)+"H)",0];
+				},
+			},
+			{
+				Name:"filesize",
+				Desc:"File Size",
+				Type:["uhex","",8],
+				Value:function(Parameters,This,Base)
+				{
+					return [getSize(parseInt(This.Val.filesize,16))+"("+AbbrValue(This.Val.filesize)+"H)",0];
+				},
+			},
+			{
+				Name:"attributes",
+				Desc:"File Attributes",
+				Type:["uhex","",4],
+			},
+			{
+				Name:"easize",
+				Desc:"Packed EA Size",
+				Type:["uhex","",2],
+			},
+			{
+				Name:"reserved",
+				Desc:"Reserved",
+				Type:["uhex","",2],
+			},
+			{
+				Name:"namelength",
+				Desc:"Name Length",
+				Type:["uhex","",1],
+			},
+			{
+				Name:"namespace",
+				Desc:"Name Type",
+				Type:["uhex","",1],
+				Value:function(Parameters,This,Base)
+				{
+					var r=["",1];
+					if(This.Val.namespace=='00')
+					{
+						r[0]="Posix Name";
+					}
+					else if(This.Val.namespace=='01')
+					{
+						r[0]="Long File Name";
+					}
+					else if(This.Val.namespace=='02')
+					{
+						r[0]="Short File Name";
+					}
+					else if(This.Val.namespace=='03')
+					{
+						r[0]="Long/Short File Name";
+					}
+					else
+					{
+						r[0]="Unknown("+This.Val.namespace+"H)";
+						r[1]=-1;
+					}
+					return r;
+				},
+			},
+		],
+		Next:function(Parameters,This,Base)
+		{
+			return [{Name:"filename",Desc:"File Name",Type:["unicode16","",parseInt((parseInt(This.Val.namelength,16)*2+9)/8)*8-2]}];
+		},
+	}
+	
+	var vi=
+	{
+		Vendor:"weLees Co., LTD",
+		Ver:"1.0.0",
+		Group:"NTFS",
+		Comment:"Data of NTFS Attribute Volume Information",
+		Author:"Ares Lee from welees.com",
+		Type:"vi",
+		Name:"* Attribute Data : Volume Information",
+		Size:["",16],
+		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
+		Members:
+		[
+			{
+				Name:"pad1",
+				Desc:"Pad",
+				Type:["uhex","",8],
+			},
+			{
+				Name:"major",
+				Desc:"Major Version",
+				Type:["uhex","",1],
+			},
+			{
+				Name:"minor",
+				Desc:"Minor Version",
+				Type:["uhex","",1],
+			},
+			{
+				Name:"flags",
+				Desc:"Flags",
+				Type:["uhex","",2],
+			},
+			{
+				Name:"pad2",
+				Desc:"Pad",
+				Type:["uhex","",4],
+			},
+		]
+	}
+	
+	var oi=
+	{
+		Vendor:"weLees Co., LTD",
+		Ver:"1.0.0",
+		Group:"NTFS",
+		Comment:"Data of Object ID Index Entry",
+		Author:"Ares Lee from welees.com",
+		Type:"oi",
+		Name:"* Index Data : Object ID",
+		Size:["",72],
+		Parameters:{FileRecordSize:'400',IndexRecordSize:"1000",TotalSectors:'10000',SectorsPerCluster:"8",BytesPerSector:'200'},
+		Members:
+		[
+			{
+				Name:"id",
+				Desc:"ID",
+				Type:["guid","",16],
+			},
+			{
+				Name:"frr",
+				Desc:"Host File Record Reference",
+				Type:["NTFS_frr","",8],
+			},
+			{
+				Name:"volumeid",
+				Desc:"Create Volume ID",
+				Type:["guid","",16],
+			},
+			{
+				Name:"objectid",
+				Desc:"Create Object ID",
+				Type:["guid","",16],
+			},
+			{
+				Name:"domainid",
+				Desc:"Domain ID",
+				Type:["guid","",16],
+			},
+		],
+	}
+	
 	if(gStructureParser==undefined)
 		setTimeout(RegisterStructures,200);
 	else
@@ -1033,10 +1493,16 @@ function RegisterStructures()
 		gStructureParser.Register(bootsector);
 		gStructureParser.Register(filerecord);
 		gStructureParser.Register(indexrecord);
-		gStructureParser.Register(clientrecord);
 		gStructureParser.Register(frr);
 		gStructureParser.Register(attrhead);
 		gStructureParser.Register(resident);
 		gStructureParser.Register(nonresident);
+		gStructureParser.Register(ih);
+		gStructureParser.Register(ief);
+		gStructureParser.Register(fn);
+		gStructureParser.Register(ir);
+		gStructureParser.Register(si);
+		gStructureParser.Register(vi);
+		gStructureParser.Register(oi);
 	}
 }
