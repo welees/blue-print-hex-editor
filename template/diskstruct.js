@@ -7,7 +7,7 @@ function RegisterStructures()
 	{
 		Vendor:"weLees Co., LTD",
 		//vendor information
-		Ver:"2.1.0",
+		Ver:"2.1.1",
 		Comment:"MBR(Master Boot Record)/PBR(Partition Boot Record), to detect the disk & partition information",
 		Author:"Ares Lee from welees.com",
 		Group:"Disk",
@@ -16,7 +16,7 @@ function RegisterStructures()
 		//The type of structure, just like int/guid. other structures refer current structure by the type
 		Name:"MBR/PBR",
 		//The name shown on structure bar
-		Size:["SectorSize",512], 
+		Size:["BytesPerSector",512], 
 		//The size of structure.
 		//  The 1st element is size for dynamical structure, it must be name of member of Parameters from device/previous structure parser, if structure is fixed size, it should be ""
 		//  The 2nd element is the default size of fixed size of structure
@@ -27,7 +27,7 @@ function RegisterStructures()
 			//The sector offset of extended partition, it is used for PBR parsing, for MBR is should be 0
 			HoldSector:'0',
 			//The sector in which the current structure resides, if the sector user parsed is not first sector, user should specify it in structure default parameter configuration dialog.
-			SectorSize:"200",
+			BytesPerSector:"200",
 			//The bytes per sector, default value is 512
 			TotalSectors:"800",
 			//The total sectors of device
@@ -90,7 +90,7 @@ function RegisterStructures()
 		Type:"mbrpart",
 		Name:"Part Entry",
 		Size:["",16],
-		Parameters:{ExtendedPartSector:"0",HoldSector:'0',SectorSize:"200",TotalSectors:"800"},
+		Parameters:{ExtendedPartSector:"0",HoldSector:'0',BytesPerSector:"200",TotalSectors:"800"},
 		Members:
 		[
 			{
@@ -232,18 +232,16 @@ function RegisterStructures()
 				{
 					if((This.Val.fs=='05')||(This.Val.fs=='0F'))
 					{
-						return ["@"+getSize(parseInt(MegaHexMulU(Parameters.SectorSize,MegaHexAddU(Parameters.ExtendedPartSector,This.Val.lbastartsector)),16))+"("+This.Val.lbastartsector+")",NumberCompare(This.Val.lbastartsector,Parameters.TotalSectors)?1:-1];
+						return ["@"+getSize(parseInt(MegaHexMulU(Parameters.BytesPerSector,MegaHexAddU(Parameters.ExtendedPartSector,This.Val.lbastartsector)),16))+"(+"+AbbrValue(This.Val.lbastartsector)+"H, @"+AbbrValue(MegaHexAddU(Parameters.ExtendedPartSector,This.Val.lbastartsector))+"H)",NumberCompare(This.Val.lbastartsector,Parameters.TotalSectors)?1:-1];
 					}
 					else
 					{
-						return ["+"+getSize(parseInt(MegaHexMulU(Parameters.SectorSize,This.Val.lbastartsector),16))+"("+This.Val.lbastartsector+")",NumberCompare(This.Val.lbastartsector,Parameters.TotalSectors)?1:-1];
+						return ["+"+getSize(parseInt(MegaHexMulU(Parameters.BytesPerSector,This.Val.lbastartsector),16))+"(+"+AbbrValue(This.Val.lbastartsector)+"H, @"+AbbrValue(MegaHexAddU(Parameters.HoldSector,This.Val.lbastartsector))+"H)",NumberCompare(This.Val.lbastartsector,Parameters.TotalSectors)?1:-1];
 					}
 				},
 				Ref:function(Parameters,This,Base)
 				{
 					var Result={Ref:{},StartOffset:"",Size:""};
-					This.Parameters.ExtendedPartSector='0';
-					This.Parameters.SectorCount='800';
 					if((!parseInt(This.Val.lbastartsector,16))||(!parseInt(This.Val.sectorcount,16)))
 					{
 						Result.NoRef=true;
@@ -258,30 +256,30 @@ function RegisterStructures()
 						{
 							Parameters.ExtendedPartSector="0";
 						}
-						This.Parameters.SectorCount=This.Val.sectorcount;
-						//This.Size=MegaHexMulU(This.Val.sectorcount,Parameters.SectorSize);
+						Parameters.SectorCount=This.Val.sectorcount;
+						//This.Size=MegaHexMulU(This.Val.sectorcount,Parameters.BytesPerSector);
 						if((This.Val.fs=="05")||(This.Val.fs=="0F"))
 						{//Extended partition
 							Result.Ref={Group:"Disk",Type:["mbr"]};
-							Result.StartOffset=MegaHexMulU(MegaHexAddU(Parameters.ExtendedPartSector,This.Val.lbastartsector),Parameters.SectorSize);
-							This.Parameters.HoldSector=MegaHexAddU(This.Val.lbastartsector,Parameters.ExtendedPartSector);
+							Result.StartOffset=MegaHexMulU(MegaHexAddU(Parameters.ExtendedPartSector,This.Val.lbastartsector),Parameters.BytesPerSector);
+							Parameters.HoldSector=MegaHexAddU(This.Val.lbastartsector,Parameters.ExtendedPartSector);
 							if(Parameters.ExtendedPartSector=='0')
 							{
-								This.Parameters.ExtendedPartSector=This.Val.lbastartsector;
-								This.Parameters.SectorCount=This.Val.sectorcount;
+								Parameters.ExtendedPartSector=This.Val.lbastartsector;
+								Parameters.SectorCount=This.Val.sectorcount;
 							}
 							else
 							{
-								//This.Parameters.ExtendedPartSector=Parameters.ExtendedPartSector;
-								//This.Parameters.SectorCount=Parameters.SectorCount;
+								//Parameters.ExtendedPartSector=Parameters.ExtendedPartSector;
+								//Parameters.SectorCount=Parameters.SectorCount;
 							}
 						}
 						else if(This.Val.fs=="EE")
 						{//GPT holder
-							This.Parameters.HoldSector=This.Val.lbastartsector;
-							This.Parameters.StartSector=This.Val.lbastartsector;
-							//This.Parameters.SectorCount=Parameters.SectorCount;
-							Result.StartOffset=MegaHexMulU(MegaHexAddU(Parameters.HoldSector,This.Val.lbastartsector),Parameters.SectorSize);
+							Parameters.StartSector=This.Val.lbastartsector;
+							//Parameters.SectorCount=Parameters.SectorCount;
+							Result.StartOffset=MegaHexMulU(MegaHexAddU(Parameters.HoldSector,This.Val.lbastartsector),Parameters.BytesPerSector);
+							Parameters.HoldSector=This.Val.lbastartsector;//Update parameter
 							Result.Ref=
 							{
 								Group:"Disk",Type:["gptheader"],
@@ -290,17 +288,17 @@ function RegisterStructures()
 									Name:"",
 									Sections:
 									[
-										[Parameters.DeviceName,0,MegaHexMulU(This.Val.lbastartsector,Parameters.SectorSize),MegaHexMulU(This.Val.sectorcount,Parameters.SectorSize)]
+										[Parameters.DeviceName,0,MegaHexMulU(This.Val.lbastartsector,Parameters.BytesPerSector),MegaHexMulU(This.Val.sectorcount,Parameters.BytesPerSector)]
 									]
 								}*/
 							};
 						}
 						else
 						{//Normale partition
-							This.Parameters.HoldSector=MegaHexAddU(This.Val.lbastartsector,Parameters.HoldSector);
-							This.Parameters.StartSector=MegaHexAddU(Parameters.HoldSector,This.Val.lbastartsector);
-							Result.StartOffset=MegaHexMulU(MegaHexAddU(Parameters.HoldSector,This.Val.lbastartsector),Parameters.SectorSize);
-							Result.Ref.Target={Name:"",Sections:[[Parameters.DeviceName,0,MegaHexMulU(MegaHexAddU(Parameters.HoldSector,This.Val.lbastartsector),Parameters.SectorSize),MegaHexMulU(This.Val.sectorcount,Parameters.SectorSize)]]};
+							Parameters.StartSector=MegaHexAddU(Parameters.HoldSector,This.Val.lbastartsector);
+							Result.StartOffset=MegaHexMulU(MegaHexAddU(Parameters.HoldSector,This.Val.lbastartsector),Parameters.BytesPerSector);
+							Parameters.HoldSector=MegaHexAddU(This.Val.lbastartsector,Parameters.HoldSector);//Update parameter
+							Result.Ref.Target={Name:"",Sections:[[Parameters.DeviceName,0,MegaHexMulU(MegaHexAddU(Parameters.HoldSector,This.Val.lbastartsector),Parameters.BytesPerSector),MegaHexMulU(This.Val.sectorcount,Parameters.BytesPerSector)]]};
 							Result.Ref.Target.Name=Parameters.DeviceName+"_pt_"+Result.Ref.Target.Sections[0][2];
 							if(This.Val.fs=="07")
 							{
@@ -339,7 +337,7 @@ function RegisterStructures()
 				Type:["uhex","",4], //uhex/hex/oct/uoct/udec/dec/bin, bytes
 				Value:function(Parameters,This,Base)
 				{
-					var r=[getSize(parseInt(Parameters.SectorSize,16)*parseInt(This.Val.sectorcount,16))+"("+This.Val.sectorcount+"H)",0];
+					var r=[getSize(parseInt(Parameters.BytesPerSector,16)*parseInt(This.Val.sectorcount,16))+"("+This.Val.sectorcount+"H)",0];
 					
 					if(((This.Val.fs!='00')&&(!parseInt(This.Val.sectorcount,16)))||
 					   ((This.Val.fs=='00')&&(parseInt(This.Val.sectorcount,16))))
@@ -360,8 +358,8 @@ function RegisterStructures()
 		Group:"Disk", //(1) Group name
 		Type:"gptheader", //(2) Structure name
 		Name:"GPT Header", //(3) Showing name
-		Size:["SectorSize",512], //(4) Structure size
-		Parameters:{AlternateHeaderSector:'0',SectorSize:"200",TotalSectors:"800"}, //(5) Default parameters
+		Size:["BytesPerSector",512], //(4) Structure size
+		Parameters:{AlternateHeaderSector:'0',BytesPerSector:"200",TotalSectors:"800"}, //(5) Default parameters
 		Members: //(6) Members in structure
 		[
 			{
@@ -391,7 +389,7 @@ function RegisterStructures()
 				Type:['uhex',"",4],
 				Value:function(Parameters,This,Base)
 				{
-					return [This.Val.headersize,parseInt(This.Val.headersize,16)<=parseInt(Parameters.SectorSize,16)?1:-1];
+					return [This.Val.headersize,parseInt(This.Val.headersize,16)<=parseInt(Parameters.BytesPerSector,16)?1:-1];
 				}
 			},
 			{
@@ -416,7 +414,7 @@ function RegisterStructures()
 				Value:function(Parameters,This,Base)
 				{
 					return [This.Val.primaryheaderoffset,
-							(!MegaHexCompU(MegaHexDivU(Base,Parameters.SectorSize),This.Val.primaryheaderoffset))&&
+							(!MegaHexCompU(MegaHexDivU(Base,Parameters.BytesPerSector),This.Val.primaryheaderoffset))&&
 							(((Parameters.AlternateHeaderSector!='0')&&(!MegaHexCompU(Parameters.AlternateHeaderSector,This.Val.primaryheaderoffset)))||
 							 (Parameters.AlternateHeaderSector=='0'))
 							?1:-1];
@@ -435,9 +433,9 @@ function RegisterStructures()
 				},
 				Ref:function(Parameters,This,Base) //(13) Associated structure refering filter
 				{
-					var Result={Ref:{Group:"Disk",Type:["gptheader"]},StartOffset:MegaHexMulU(This.Val.coheaderoffset,Parameters.SectorSize),Size:Parameters.Size};
-					This.Parameters.PrimaryHeaderOffset=This.Val.primaryheaderoffset;
-					This.Parameters.AlternateHeaderSector=This.Val.coheaderoffset;
+					var Result={Ref:{Group:"Disk",Type:["gptheader"]},StartOffset:MegaHexMulU(This.Val.coheaderoffset,Parameters.BytesPerSector),Size:Parameters.Size};
+					Parameters.PrimaryHeaderOffset=This.Val.primaryheaderoffset;
+					Parameters.AlternateHeaderSector=This.Val.coheaderoffset;
 					
 					return Result;
 				}
@@ -465,19 +463,19 @@ function RegisterStructures()
 				{
 					var s=MegaHexMulU(This.Val.partentrysize,This.Val.parttableentrycount);
 					return [This.Val.parttablestartsector,
-							((MegaHexModU(s,Parameters.SectorSize)=='0')&&
-							 ((MegaHexCompU(MegaHexAddU(This.Val.parttablestartsector,MegaHexDivU(s,Parameters.SectorSize)),This.Val.firstsector)<=0)||
+							((MegaHexModU(s,Parameters.BytesPerSector)=='0')&&
+							 ((MegaHexCompU(MegaHexAddU(This.Val.parttablestartsector,MegaHexDivU(s,Parameters.BytesPerSector)),This.Val.firstsector)<=0)||
 							  (MegaHexCompU(This.Val.parttablestartsector,This.Val.lastsector)>0)))
 							?1:-1];
 				},
 				Ref:function(Parameters,This,Base)
 				{
-					var Result={Ref:{Group:"PartTable",Type:["gptentry"],Size:This.Val.parttableentrysize,Repeat:This.Val.parttableentrycount},StartOffset:MegaHexMulU(Parameters.SectorSize,This.Val.parttablestartsector),Size:MegaHexMulU(This.Val.partentrysize,This.Val.parttableentrycount)};
-					This.Parameters.EntryCount=This.Val.parttableentrycount;
-					This.Parameters.EntrySize=This.Val.partentrysize;
-					This.Parameters.FirstSector=This.Val.firstsector;
-					This.Parameters.LastSector=This.Val.lastsector;
-					This.Parameters.CRC=This.Val.entrycrc;
+					var Result={Ref:{Group:"PartTable",Type:["gptentry"],Size:This.Val.parttableentrysize,Repeat:This.Val.parttableentrycount},StartOffset:MegaHexMulU(Parameters.BytesPerSector,This.Val.parttablestartsector),Size:MegaHexMulU(This.Val.partentrysize,This.Val.parttableentrycount)};
+					Parameters.EntryCount=This.Val.parttableentrycount;
+					Parameters.EntrySize=This.Val.partentrysize;
+					Parameters.FirstSector=This.Val.firstsector;
+					Parameters.LastSector=This.Val.lastsector;
+					Parameters.CRC=This.Val.entrycrc;
 					
 					return Result;
 				}
@@ -503,7 +501,7 @@ function RegisterStructures()
 			}
 		]
 	};
-
+	
 	var gptentry={
 		Vendor:"weLees Co., LTD",
 		Ver:"2.0.0",
@@ -513,7 +511,7 @@ function RegisterStructures()
 		Type:"gptentry",
 		Name:"GPT Entry",
 		Size:["EntrySize",128],
-		Parameters:{CRC:'0',FirstSector:'22',LastSector:'0',EntryCount:"80",EntrySize:"80",SectorSize:"200"},
+		Parameters:{CRC:'0',FirstSector:'22',LastSector:'0',EntryCount:"80",EntrySize:"80",BytesPerSector:"200"},
 		Members:
 		[
 			{
@@ -594,7 +592,7 @@ function RegisterStructures()
 				Type:['uhex',"",8],
 				Value:function(Parameters,This,Base)
 				{
-					var Result=["@"+getSize(parseInt(MegaHexMulU(This.Val.startsector,Parameters.SectorSize),16))+"("+This.Val.startsector+"H)",0];
+					var Result=["@"+getSize(parseInt(MegaHexMulU(This.Val.startsector,Parameters.BytesPerSector),16))+"("+This.Val.startsector+"H)",0];
 					if((MegaHexCompU(Parameters.FirstSector,This.Val.startsector)<=0)&&
 					   (MegaHexCompU(Parameters.LastSector,This.Val.lastsector)>=0))
 					{
@@ -619,7 +617,7 @@ function RegisterStructures()
 				Type:['uhex',"",8],
 				Value:function(Parameters,This,Base)
 				{
-					return ["Size "+getSize(parseInt(MegaHexMulU(MegaHexAddU(MegaHexSubU(This.Val.lastsector,This.Val.startsector),'1'),Parameters.SectorSize),16))+"("+This.Val.lastsector+"H)",MegaHexCompU(This.Val.startsector,This.Val.lastsector)<0?1:-1];
+					return ["Size "+getSize(parseInt(MegaHexMulU(MegaHexAddU(MegaHexSubU(This.Val.lastsector,This.Val.startsector),'1'),Parameters.BytesPerSector),16))+"("+This.Val.lastsector+"H)",MegaHexCompU(This.Val.startsector,This.Val.lastsector)<0?1:-1];
 				},
 			},
 			{
@@ -635,7 +633,7 @@ function RegisterStructures()
 		],
 		Neighbor:function(Parameters,This,Base) //(14) The neighbor structure filter
 		{
-			if(This.Parameters.Index<parseInt(Parameters.EntryCount,16)-1)
+			if(Parameters.Index<parseInt(Parameters.EntryCount,16)-1)
 			{
 				return [["PartTable","gptentry"]];//Multiple type maybe
 			}
