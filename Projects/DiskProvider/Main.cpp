@@ -724,7 +724,7 @@ int PipeRun(IN char *pFormat,IN UINT uTimeout,OUT vector<char> &sRet)
 	{
 		return -1;
 	}
-
+	
 	iHandle=fileno(file);
 	sRet.clear();
 	sRet.push_back(0);
@@ -732,7 +732,7 @@ int PipeRun(IN char *pFormat,IN UINT uTimeout,OUT vector<char> &sRet)
 	{
 		uTimeout=-1;
 	}
-
+	
 	for(i=0;(UINT)i<uTimeout;)
 	{
 		FD_ZERO(&rs);
@@ -784,17 +784,7 @@ vector<char*> g_Devices;
 
 
 #ifdef _LINUX
-#define ENUM_DISK (PCHAR) \
-"cmd='fdisk -l';" \
-"title=`$cmd |grep dev|head -1|awk '{print $1}'`;" \
-"list=`$cmd |grep $title|grep dev|awk '{print $2}'|sed 's/://'|sed '/\\/dev\\/ram/d'|sed '/\\/dev\\/loop/d'`;" \
-"result='';" \
-"for dev in `ls /dev/`; do " \
-"check=`echo $list|grep \"/dev/$dev\"`;" \
-"[ \"$check\" != \"\" ] && " \
-"[ ! -d /dev/$dev ] && " \
-"result=`echo \"/dev/$dev $result\"`;" \
-"done;echo $result"
+#define ENUM_DISK (PCHAR) "ls /sys/block|sed 's/^/\\/dev\\//g;/ram/d;/loop/d;/dm-[0-9]*/d'"
 #endif //_LINUX
 #ifdef _MACOS
 #define ENUM_DISK (PCHAR)"diskutil list|grep '/dev/'|awk '{print $1}'|sed 's@/dev/@/dev/r@'"
