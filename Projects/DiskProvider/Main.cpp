@@ -1,6 +1,10 @@
 #ifdef _WIN32
 #include <Windows.h>
 #include <crtdbg.h>
+#include <setupapi.h>
+#include <vector>
+#include <algorithm>
+using namespace std;
 
 #define PROVIDER_TITLE (PCHAR)"weLees Windows DiskProvider"
 #else //_WIN32
@@ -30,7 +34,6 @@ typedef void *PVOID;
 #include <stdlib.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
 #include <string.h>
@@ -407,6 +410,87 @@ typedef struct _DISK_GEOMETRY_EX
 
 #endif //_WINDOWS_SDK_5_UP
 
+int CompareUINT(IN UINT u1,IN UINT u2)
+{
+	return u1<u2;
+}
+
+
+BOOL EnumerateDisks(OUT PUINT *pList,OUT PUINT pCount)
+{
+	UINT                             uErrorCode;
+	UINT                             uIndex;
+	DWORD                            uDesireSize;
+	HANDLE                           hDisk;
+	HDEVINFO                         hClassHandle;
+	vector<UINT>                     List;
+	STORAGE_DEVICE_NUMBER            sdnDiskNumber;
+	SP_DEVICE_INTERFACE_DATA         didInterfaceData;
+	PSP_DEVICE_INTERFACE_DETAIL_DATA pInterfaceDetailData;
+	
+	hClassHandle=SetupDiGetClassDevs(&GUID_DEVINTERFACE_DISK,NULL,NULL,DIGCF_PRESENT|DIGCF_DEVICEINTERFACE);
+	if(INVALID_HANDLE_VALUE==hClassHandle)
+	{
+		return GetLastError();
+	}
+	
+	ZeroMemory(&didInterfaceData,sizeof(SP_DEVICE_INTERFACE_DATA));
+	didInterfaceData.cbSize=sizeof(SP_DEVICE_INTERFACE_DATA);
+	
+	for(uIndex=0;SetupDiEnumDeviceInterfaces(hClassHandle,NULL,&GUID_DEVINTERFACE_DISK,uIndex,&didInterfaceData);uIndex++)
+	{
+		SetupDiGetDeviceInterfaceDetail(hClassHandle,&didInterfaceData,NULL,0,&uDesireSize,NULL);
+		if(ERROR_INSUFFICIENT_BUFFER!=GetLastError())
+		{
+			SetupDiDestroyDeviceInfoList(hClassHandle);
+			return GetLastError();
+		}
+		pInterfaceDetailData=(PSP_DEVICE_INTERFACE_DETAIL_DATA)malloc(uDesireSize);
+		_ASSERT(pInterfaceDetailData);
+		ZeroMemory(pInterfaceDetailData,uDesireSize);
+		pInterfaceDetailData->cbSize=sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA);
+		if(!SetupDiGetDeviceInterfaceDetail(hClassHandle,&didInterfaceData,pInterfaceDetailData,uDesireSize,NULL,NULL))
+		{
+			free(pInterfaceDetailData);
+			SetupDiDestroyDeviceInfoList(hClassHandle);
+			return GetLastError();
+		}
+		
+		hDisk=CreateFile(pInterfaceDetailData->DevicePath,GENERIC_READ,FILE_SHARE_READ | FILE_SHARE_WRITE,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL );
+		free(pInterfaceDetailData);
+		if(INVALID_HANDLE_VALUE==hDisk)
+		{
+			SetupDiDestroyDeviceInfoList(hClassHandle);
+			return GetLastError();
+		}
+		
+		if(!DeviceIoControl(hDisk,IOCTL_STORAGE_GET_DEVICE_NUMBER,NULL,0,&sdnDiskNumber,sizeof( STORAGE_DEVICE_NUMBER ),&uDesireSize,NULL ))
+		{
+			CloseHandle(hDisk);
+			free(pInterfaceDetailData);
+			SetupDiDestroyDeviceInfoList(hClassHandle);
+			return GetLastError();
+		}
+		
+		CloseHandle(hDisk);
+		List.push_back(sdnDiskNumber.DeviceNumber);
+	}
+	uErrorCode=GetLastError();
+	SetupDiDestroyDeviceInfoList(hClassHandle);
+	if(List.size())
+	{
+		sort(List.begin(),List.end(),CompareUINT);
+		*pList=(PUINT)malloc(List.size()*sizeof(UINT));
+		_ASSERT(*pList);
+		for(uIndex=0;uIndex<List.size();uIndex++)
+		{
+			(*pList)[uIndex]=List[uIndex];
+		}
+		*pCount=List.size();
+	}
+	return (ERROR_SUCCESS==uErrorCode)||(ERROR_NO_MORE_ITEMS==uErrorCode);
+}
+
 
 int APIENTRY DllMain(IN HANDLE hModule,IN DWORD uCommand,LPVOID lpReserved)
 {
@@ -418,12 +502,14 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 {
 	int                   i;
 	char                  szDeviceName[MAX_PATH]="\\\\.\\physicaldrive000";
+	UINT                  uCount;
 	ULONG                 u;
 	union
 	{
 		DISK_GEOMETRY_EX Geometry;
 		BYTE             Pad[4096];
 	}Data;
+	PUINT                 pList;
 	HANDLE                hDevice;
 	UINT32                uErrorCode=ERROR_SUCCESS;
 	PSHAKE_HAND           pShakeHand;
@@ -455,31 +541,23 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 		case _COMMAND_ENUM_DEVICE:
 			pEnum=(PENUM_DEVICE)pParameter;
 			pEnum->ReturnCount=0;
-			for(i=0;i<pEnum->RequestCount;i++)
+			if(EnumerateDisks(&pList,&uCount))
 			{
-#if _MSC_VER<1300
-				sprintf(szDeviceName+17,
-#else
-				sprintf_s(szDeviceName+17,sizeof(szDeviceName-17),
-#endif
-					"%d",(int)pEnum->Handle);
-				hDevice=CreateFile(szDeviceName,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,0,NULL);
-				if(INVALID_HANDLE_VALUE==hDevice)
+				for(i=0;(pEnum->Handle<uCount)&&(i<pEnum->RequestCount);i++)
 				{
-					break;
-				}
 #if _MSC_VER<1300
-				sprintf(pEnum->Result[i].Name,"//./physicaldrive%d",(int)pEnum->Handle);
-				sprintf(pEnum->Result[i].Desc,"Disk %d",(int)pEnum->Handle+1);
+					sprintf(pEnum->Result[i].Name,"//./physicaldrive%d",(int)pList[pEnum->Handle]);
+					sprintf(pEnum->Result[i].Desc,"Disk %d",(int)pEnum->Handle+1);
 #else
-				sprintf_s(pEnum->Result[i].Name,sizeof(pEnum->Result[i].Name),"//./physicaldrive%d",(int)pEnum->Handle);
-				sprintf_s(pEnum->Result[i].Desc,sizeof(pEnum->Result[i].Desc),"Disk %d",(int)pEnum->Handle+1);
+					sprintf_s(pEnum->Result[i].Name,sizeof(pEnum->Result[i].Name),"//./physicaldrive%d",(int)pList[pEnum->Handle]);
+					sprintf_s(pEnum->Result[i].Desc,sizeof(pEnum->Result[i].Desc),"Disk %d",(int)pList[pEnum->Handle]);
 #endif
-				pEnum->Result[i].Folder=FALSE;
-				CloseHandle(hDevice);
-				pEnum->Handle++;
+					pEnum->Result[i].Folder=FALSE;
+					pEnum->Handle++;
+				}
+				free(pList);
+				pEnum->ReturnCount=i;
 			}
-			pEnum->ReturnCount=i;
 			break;
 		case _COMMAND_GET_DEVICE_PROFILE:
 			pProfile=(PQUERY_DEVICE_PROFILE)pParameter;
