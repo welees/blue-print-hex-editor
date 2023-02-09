@@ -1,6 +1,6 @@
 #ifdef _WIN32
-#include <Windows.h>
-#include <WinIoCtl.h>
+#include <windows.h>
+#include <winioctl.h>
 #include <crtdbg.h>
 #define PROVIDER_TITLE (PCHAR)"weLees Windows FileProvider"
 #else //_WIN32
@@ -32,7 +32,6 @@ typedef void *PVOID;
 
 #include <stdlib.h>
 #include <fcntl.h>
-#include <stdio.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -188,7 +187,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 		}
 	}
 	
-	pTask->Device=CreateFile(pSearch->DeviceName+1,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,0,NULL);
+	pTask->Device=CreateFile(pSearch->DeviceName,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,0,NULL);
 	if(INVALID_HANDLE_VALUE==pTask->Device)
 	{
 		//pSearch->Status=_SEARCH_STATUS_STOP;
@@ -197,7 +196,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 		return (PVOID)pSearch->Result->ErrorCode;
 	}
 #else //_WIN32
-	pTask->Device=open(pSearch->DeviceName+1,O_RDWR);
+	pTask->Device=open(pSearch->DeviceName,O_RDONLY);
 	if(pTask->Device<=0)
 	{
 		pSearch->Result->ErrorCode=errno;
@@ -284,7 +283,7 @@ PVOID APIENTRY SearchRoutine(IN PVOID p)
 							{//Found!
 								LOCK(pTask->Parameter->Result->Lock);//Insert result
 								pTask->Parameter->Result->MatchedCount++;
-
+								
 								pBlock=pPrev=pTask->Parameter->Result->MatchItems;
 								for(;pBlock;pPrev=pBlock,pBlock=pBlock->Next)
 								{//Find matched block
@@ -759,6 +758,7 @@ int UTF8ToANSI(IN PUINT8 pSource,IN int iSourceCount,OUT PCHAR pTarget,IN int iT
 	}
 	
 	iconv(cd,(PCHAR*)&pSource,&sSource,&pTarget,&sTarget);
+	*pTarget=0;
 	return iTargetCount-sTarget;
 #endif
 }
@@ -840,10 +840,10 @@ BOOL EnumerateFunc(IN PENUM_DEVICE pEnum,IN LPNETRESOURCE pResource,IN OUT int &
 				if(!iIndex)
 				{
 #if _MSC_VER<1300
-					sprintf(pEnum->Result[pEnum->ReturnCount].Name,"//./%c:",pResourceLocal[uIndex].lpLocalName[0]);
+					sprintf(pEnum->Result[pEnum->ReturnCount].Name,"%c:",pResourceLocal[uIndex].lpLocalName[0]);
 					sprintf(pEnum->Result[pEnum->ReturnCount].Desc,"%c:/(%s)",pResourceLocal[uIndex].lpLocalName[0],pResourceLocal[uIndex].lpRemoteName);
 #else
-					sprintf_s(pEnum->Result[pEnum->ReturnCount].Name,sizeof(pEnum->Result[pEnum->ReturnCount].Name),"//./%c:",pResourceLocal[uIndex].lpLocalName[0]);
+					sprintf_s(pEnum->Result[pEnum->ReturnCount].Name,sizeof(pEnum->Result[pEnum->ReturnCount].Name),"%c:",pResourceLocal[uIndex].lpLocalName[0]);
 					sprintf_s(pEnum->Result[pEnum->ReturnCount].Desc,sizeof(pEnum->Result[pEnum->ReturnCount].Desc),"%c:/(%s)",pResourceLocal[uIndex].lpLocalName[0],pResourceLocal[uIndex].lpRemoteName);
 #endif
 					for(i=0;pEnum->Result[pEnum->ReturnCount].Desc[i];i++)
@@ -915,8 +915,8 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 	{
 		case _COMMAND_SHAKE_HAND:
 			pShakeHand=(PSHAKE_HAND)pParameter;
-			pShakeHand->MajorVersion=4;
-			pShakeHand->MinorVersion=3;
+			pShakeHand->MajorVersion=5;
+			pShakeHand->MinorVersion=0;
 			pShakeHand->Features=0;
 			pShakeHand->Type=_PROVIDER_TYPE_SOLID_DEVICE_PROVIDER;
 #if _MSC_VER<1300
@@ -948,11 +948,11 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 							continue;
 						}
 #if _MSC_VER<1300
-						sprintf(pEnum->Result[pEnum->ReturnCount].Name,"//./%c:",i+'A');
+						sprintf(pEnum->Result[pEnum->ReturnCount].Name,"%c:",i+'A');
 						sprintf(pEnum->Result[pEnum->ReturnCount].Desc,"%c:/",i+'A');
 #else
-						sprintf_s(pEnum->Result[pEnum->ReturnCount].Name,sizeof(pEnum->Result[pEnum->ReturnCount].Name),"//./%c:",i+'A');
-						sprintf_s(pEnum->Result[pEnum->ReturnCount].Desc,sizeof(pEnum->Result[pEnum->ReturnCount].Desc),"%c:/",i+'A');
+						sprintf_s(pEnum->Result[pEnum->ReturnCount].Name,sizeof(pEnum->Result[pEnum->ReturnCount].Name),"%c:",i+'A');
+						sprintf_s(pEnum->Result[pEnum->ReturnCount].Desc,sizeof(pEnum->Result[pEnum->ReturnCount].Desc),"%c:",i+'A');
 #endif
 						pEnum->Result[pEnum->ReturnCount].Folder=TRUE;
 						CloseHandle(hDevice);
@@ -971,7 +971,7 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 				if(!pEnum->Handle)
 				{
 					ZeroMemory(szDeviceName,sizeof(szDeviceName));
-					UTF8ToANSI((PUINT8)pEnum->Path+5,strlen(pEnum->Path+5),szDeviceName,sizeof(szDeviceName));
+					UTF8ToANSI((PUINT8)pEnum->Path+1,strlen(pEnum->Path+1),szDeviceName,sizeof(szDeviceName));
 #if _MSC_VER<1300
 					strcat(szDeviceName,"*");
 #else
@@ -988,6 +988,7 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 					if(hDevice==INVALID_HANDLE_VALUE)
 					{
 						uErrorCode=GetLastError();
+						break;
 					}
 					else
 					{
@@ -1003,17 +1004,22 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 					if(!FindNextFile(hDevice,&FindFile))
 					{
 						uErrorCode=GetLastError();
-						if(ERROR_NO_MORE_FILES==uErrorCode)
+						if(ERROR_MORE_DATA==uErrorCode)
 						{
-							uErrorCode=0;
-							FindClose(hDevice);
-							hDevice=NULL;
 						}
-						
-						break;
+						else
+						{
+							if(ERROR_NO_MORE_FILES==uErrorCode)
+							{
+								uErrorCode=0;
+								FindClose(hDevice);
+								hDevice=NULL;
+							}
+							
+							break;
+						}
 					}
 					
-					//FillInfo(pEnum->Result+pEnum->ReturnCount,szDeviceName,&FindFile);
 					FillEnum(pEnum,&FindFile);
 				}
 				
@@ -1023,7 +1029,7 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 		case _COMMAND_GET_DEVICE_PROFILE:
 			pProfile=(PQUERY_DEVICE_PROFILE)pParameter;
 			pProfile->Features=0;
-			UTF8ToANSI((PUINT8)pProfile->Name+5,strlen(pProfile->Name+5),szDeviceName,sizeof(szDeviceName));
+			UTF8ToANSI((PUINT8)pProfile->Name+1,strlen(pProfile->Name+1),szDeviceName,sizeof(szDeviceName));
 			for(i=0;i<(int)strlen(szDeviceName);i++)
 			{
 				if(szDeviceName[i]=='/')
@@ -1037,7 +1043,7 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 			break;
 		case _COMMAND_READ:
 			pAccess=(PACCESS_PARAM)pParameter;
-			UTF8ToANSI((PUINT8)pAccess->Name+5,strlen(pAccess->Name+5),szDeviceName,sizeof(szDeviceName));
+			UTF8ToANSI((PUINT8)pAccess->Name+1,strlen(pAccess->Name+1),szDeviceName,sizeof(szDeviceName));
 			for(i=0;i<(int)strlen(szDeviceName);i++)
 			{
 				if(szDeviceName[i]=='/')
@@ -1063,7 +1069,7 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 			break;
 		case _COMMAND_REPLACE_MODIFIED_FILE:
 			pReplace=(PREPLACE_MODIFIED_FILE)pParameter;
-			UTF8ToANSI((PUINT8)pReplace->FileName+5,strlen(pReplace->FileName+5),szDeviceName,sizeof(szDeviceName));
+			UTF8ToANSI((PUINT8)pReplace->FileName+1,strlen(pReplace->FileName+1),szDeviceName,sizeof(szDeviceName));
 			for(i=0;i<(int)strlen(szDeviceName);i++)
 			{
 				if(szDeviceName[i]=='/')
@@ -1089,7 +1095,7 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 			break;
 		case _COMMAND_WRITE:
 			pAccess=(PACCESS_PARAM)pParameter;
-			UTF8ToANSI((PUINT8)pAccess->Name+5,strlen(pAccess->Name+5),szDeviceName,sizeof(szDeviceName));
+			UTF8ToANSI((PUINT8)pAccess->Name+1,strlen(pAccess->Name+1),szDeviceName,sizeof(szDeviceName));
 			for(i=0;i<(int)strlen(szDeviceName);i++)
 			{
 				if(szDeviceName[i]=='/')
@@ -1146,7 +1152,7 @@ extern "C" __declspec(dllexport) UINT32 ServiceEntry(IN UINT16 uCommand,IN PVOID
 #if _MSC_VER<1300
 					strcpy(pTask->Parameter->DeviceName,pSearch->DeviceName);
 #else
-					strcpy_s(pTask->Parameter->DeviceName,strlen(pSearch->DeviceName)+1,pSearch->DeviceName);
+					strcpy_s(pTask->Parameter->DeviceName,strlen(pSearch->DeviceName)+1,pSearch->DeviceName+1);
 #endif
 					pTask->Parameter->Data=(PUINT8)ALLOC(pSearch->DataSize);
 					_ASSERT(pTask->Parameter->Data);
